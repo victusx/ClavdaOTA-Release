@@ -27,7 +27,7 @@ ESP8266 and RP2040/RP2350 are not supported by 2.x.
 
 ### Arduino IDE
 
-1. Download the library as a ZIP: pick a version under [Tags](https://github.com/victusx/ClavdaOTA-Release/tags), or use **Code → Download ZIP** for the latest.
+1. Download the library as a ZIP: **Code → Download ZIP** on [this page](https://github.com/victusx/ClavdaOTA-Release).
 2. `Sketch > Include Library > Add .ZIP Library…` and choose the file.
 3. `Tools > Manage Libraries…` and install the two libraries it depends on: **WebSockets** by Markus Sattler and **ArduinoJson** by Benoit Blanchon. A ZIP install does not fetch them for you.
 
@@ -35,7 +35,7 @@ ESP8266 and RP2040/RP2350 are not supported by 2.x.
 
 ```ini
 lib_deps =
-  https://github.com/victusx/ClavdaOTA-Release.git#v2.1.0
+  https://github.com/victusx/ClavdaOTA-Release.git
 ```
 
 The WebSockets and ArduinoJson dependencies are pulled in from `library.json`.
