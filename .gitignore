@@ -1,0 +1,45 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+.docusaurus
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+node_modules
+.DS_Store
+.vscode
+/build
+/portal
+.pio
+
+# Device credentials downloaded from the Clavda console - they contain secrets
+clavda_device.h
+# arduino-cli exports build output next to a sketch
+**/build/
