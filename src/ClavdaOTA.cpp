@@ -399,6 +399,9 @@ bool ClavdaOTAClass::begin(const ClavdaBundle &bundle) {
     if (st.onProgress) st.onProgress(current, total);
   });
 
+  // Before the first dial, so the relay's TLS session is allocated in PSRAM too.
+  if (tlsPreferPsram()) log_i("[ClavdaOTA] PSRAM found; TLS buffers will use it");
+
   if (!st.link.begin(bundle.relayUrl ? bundle.relayUrl : "", bundle.caRoots, authJson,
                      onRelayEvent, onRelayOnline)) {
     st.status = CLAVDA_CONNECTING;

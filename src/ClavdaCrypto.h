@@ -45,6 +45,15 @@ bool sealBytes(const uint8_t key[32], const uint8_t *plain, size_t len, const ch
 bool openBytes(const uint8_t key[32], const char *sealedB64, const char *aad, uint8_t *out,
                size_t outCap, size_t &outLen);
 
+/**
+ * On a board with PSRAM, point mbedTLS's allocator at it. The core pins every
+ * mbedTLS allocation to internal RAM, so each TLS connection - two 16 KB record
+ * buffers, the parsed CA roots and the server's chain - otherwise comes out of
+ * the same heap as the sketch. Applies to every TLS connection in the sketch.
+ * False, with nothing changed, when there is no PSRAM.
+ */
+bool tlsPreferPsram();
+
 class Sha256 {
   public:
     Sha256();

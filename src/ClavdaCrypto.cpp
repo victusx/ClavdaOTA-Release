@@ -1,9 +1,11 @@
 #include "ClavdaCrypto.h"
 
 #include <memory>
+#include "esp_heap_caps.h"
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/gcm.h"
+#include "mbedtls/platform.h"
 #include "mbedtls/version.h"
 #if ESP_IDF_VERSION_MAJOR >= 5
   #include "esp_random.h"
@@ -19,6 +21,19 @@ static const size_t KEY_LEN = 32;
 // A job is a few hundred bytes plus a presigned URL. Anything far past that
 // is not one, and is not worth a heap allocation to find out.
 static const size_t MAX_SEALED_B64 = 8192;
+
+// Only where the core both pins mbedTLS to internal RAM and lets the allocator
+// be swapped at runtime; a custom sdkconfig that chose otherwise is left alone.
+#if defined(CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC) && defined(MBEDTLS_PLATFORM_MEMORY) && \
+    !defined(MBEDTLS_PLATFORM_CALLOC_MACRO)
+  #define CLAVDA_TLS_PSRAM 1
+
+// PSRAM first, then internal RAM once PSRAM is full, rather than failing a handshake.
+static IRAM_ATTR void *tlsCalloc(size_t n, size_t size) {
+  return heap_caps_calloc_prefer(n, size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+#endif
 
 bool isValidId(const char *id, size_t max) {
   if (!id) return false;
@@ -154,6 +169,18 @@ bool openBytes(const uint8_t key[32], const char *sealedB64, const char *aad, ui
   if (rc != 0) return false;
   outLen = ctLen;
   return true;
+}
+
+bool tlsPreferPsram() {
+#ifdef CLAVDA_TLS_PSRAM
+  if (!heap_caps_get_total_size(MALLOC_CAP_SPIRAM)) return false;
+  // heap_caps_free() frees from any region, so blocks the core's allocator
+  // handed out before the switch - Wi-Fi's, say - are still freed correctly.
+  mbedtls_platform_set_calloc_free(tlsCalloc, heap_caps_free);
+  return true;
+#else
+  return false;
+#endif
 }
 
 Sha256::Sha256() {

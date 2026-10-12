@@ -1,10 +1,15 @@
 #include "ClavdaSerial.h"
 
+#include "esp_heap_caps.h"
+
 bool ClavdaSerialClass::begin(Print *mirror, size_t bufferSize) {
   _mirror = mirror;
   if (_buf) return true;
   if (bufferSize < 256) bufferSize = 256;
-  _buf = (uint8_t *)malloc(bufferSize);
+  // PSRAM when the board has it: malloc() alone only puts blocks of 4 KB and
+  // up there, so the default 2 KB would stay in internal RAM.
+  _buf = (uint8_t *)heap_caps_malloc_prefer(bufferSize, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (!_buf) {
     log_e("[ClavdaOTA] No memory for a %u-byte ClavdaSerial buffer", (unsigned)bufferSize);
     return false;
