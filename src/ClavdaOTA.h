@@ -4,8 +4,8 @@
  * @author Clavda (support@clavda.com)
  * @brief Over-the-air firmware updates for the ESP32 family, from anywhere,
  *        through the Clavda relay.
- * @version 2.1.0
- * @date 2026-10-07
+ * @version 2.2.0
+ * @date 2026-10-13
  */
 
 #ifndef ClavdaOTA_h
@@ -15,12 +15,13 @@
 #include <functional>
 #include "sdkconfig.h"
 #include "ClavdaSerial.h"
+#include "ClavdaWidget.h"
 
 #if !defined(ESP32)
   #error "ClavdaOTA 2.x runs on the ESP32 family only (ESP32, S2, S3, C3, C6)."
 #endif
 
-#define CLAVDA_LIB_VERSION "2.1.0"
+#define CLAVDA_LIB_VERSION "2.2.0"
 
 /** The chip family as the IDF names it: "esp32", "esp32s3", "esp32c3", ... */
 #define CLAVDA_CHIP CONFIG_IDF_TARGET

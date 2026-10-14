@@ -2,7 +2,6 @@
 
 #include <inttypes.h>
 #include <memory>
-#include <time.h>
 #include "esp_idf_version.h"
 #if ESP_IDF_VERSION_MAJOR >= 5
   #include "esp_random.h"
@@ -13,6 +12,7 @@
 #include "ClavdaCrypto.h"
 #include "ClavdaLink.h"
 #include "ClavdaSerial.h"
+#include "ClavdaSession.h"
 
 namespace clavda {
 
@@ -21,8 +21,6 @@ namespace clavda {
 static const uint32_t LEASE_MS = 60000;
 // Batches a burst of prints into one frame without delaying a lone line much.
 static const uint32_t FLUSH_MS = 50;
-// A clock before this has not been set by SNTP yet.
-static const time_t CLOCK_VALID_AFTER = 1700000000;
 
 bool Monitor::available() const {
   return ClavdaSerial._buf != nullptr;
@@ -94,37 +92,12 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
   }
 
   const char *sessionId = payload["sessionId"] | "";
-  if (!isValidId(sessionId, 64)) return refuse("invalid", "Malformed session id");
-
-  String plain;
-  String error;
-  if (!openJob(identity.jobKey().c_str(), payload["enc"] | "", plain, error)) {
-    return refuse("invalid", "The monitor session did not verify on this device");
-  }
-  JsonDocument sealed;
-  if (deserializeJson(sealed, plain)) return refuse("invalid", "Malformed monitor session");
-
-  const char *kind = sealed["kind"] | "";
-  const char *sealedId = sealed["sessionId"] | "";
-  const char *sealedDevice = sealed["deviceId"] | "";
-  if ((sealed["v"] | 0) != 1 || strcmp(kind, "serial")) {
-    return refuse("invalid", "This monitor session needs a newer ClavdaOTA library");
-  }
-  if (strcmp(sealedId, sessionId) || !identity.deviceId().equals(sealedDevice)) {
-    return refuse("invalid", "This monitor session is for another device");
-  }
-
-  const time_t now = time(nullptr);
-  const uint32_t expires = sealed["exp"] | 0u;
-  if (now > CLOCK_VALID_AFTER && expires && now > (time_t)expires) {
-    return refuse("expired", "This monitor session has expired");
-  }
-
-  uint8_t key[36];
-  size_t keyLen = 0;
-  if (!base64Decode(sealed["key"] | "", key, sizeof(key), keyLen) || keyLen != 32) {
-    memset(key, 0, sizeof(key));
-    return refuse("invalid", "The monitor session carries no valid key");
+  SessionGrant grant;
+  const char *code = nullptr;
+  String why;
+  if (!openSession("serial", "monitor session", sessionId, payload["enc"] | "", identity, grant,
+                   code, why)) {
+    return refuse(code, why);
   }
 
   expire();
@@ -133,7 +106,7 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
   if (!session) {
     if (!_open) _open = new (std::nothrow) Open();
     if (!_open) {
-      memset(key, 0, sizeof(key));
+      memset(grant.key, 0, sizeof(grant.key));
       return refuse("busy", "Not enough free memory on the device to open a Serial Monitor");
     }
     for (Session &s : _open->sessions) {
@@ -143,7 +116,7 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
       }
     }
     if (!session) {
-      memset(key, 0, sizeof(key));
+      memset(grant.key, 0, sizeof(grant.key));
       return refuse("busy", String(CLAVDA_SERIAL_MAX_SESSIONS) +
                                 " Serial Monitors are already open on this device. Close one and "
                                 "try again.");
@@ -155,9 +128,9 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
     ClavdaSerial.window(session->sent, head);
   }
 
-  memcpy(session->key, key, sizeof(session->key));
-  memset(key, 0, sizeof(key));
-  session->input = sealed["input"] | false;
+  memcpy(session->key, grant.key, sizeof(session->key));
+  memset(grant.key, 0, sizeof(grant.key));
+  session->input = grant.input;
   session->leaseUntil = millis() + LEASE_MS;
 
   // A console picking up where it left off - after its relay connection
@@ -170,9 +143,16 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
     if (from <= head) session->sent = from;
   }
 
+  // Output before this offset was printed before the monitor (re)opened, at
+  // times this device cannot tell; the console leaves those lines unstamped.
+  uint64_t oldest = 0;
+  uint64_t head = 0;
+  ClavdaSerial.window(oldest, head);
+
   reply["success"] = true;
   reply["sessionId"] = session->id;
   reply["boot"] = boot();
+  reply["head"] = head;
   reply["input"] = session->input;
   reply["renewed"] = renewed;
 }

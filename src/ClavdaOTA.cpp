@@ -14,6 +14,7 @@
 #endif
 
 #include "ClavdaCrypto.h"
+#include "ClavdaDash.h"
 #include "ClavdaIdentity.h"
 #include "ClavdaLink.h"
 #include "ClavdaMonitor.h"
@@ -37,6 +38,7 @@ struct State {
   Link link;
   Pull pull;
   Monitor monitor;
+  Dash dash;
 
   const ClavdaBundle *bundle = nullptr;
   String firmwareVersion;
@@ -217,6 +219,8 @@ void fillDeviceInfo(JsonDocument &reply) {
   reply["idfVersion"] = esp_get_idf_version();
   reply["resetReason"] = resetReasonName(esp_reset_reason());
   reply["serialMonitor"] = st.monitor.available();
+  reply["dashboard"] = true;
+  reply["widgets"] = Dash::widgets();
 }
 
 /**
@@ -337,6 +341,8 @@ void onRelayEvent(const char *event, JsonVariantConst data) {
     handleOtaUpdate(payload, reply);
   } else if (st.monitor.handle(command, payload, st.identity, reply)) {
     // serial_start / serial_input / serial_stop
+  } else if (st.dash.handle(command, payload, st.identity, reply)) {
+    // dash_start / dash_input / dash_stop
   } else if (!strcmp(command, "ota_cancel")) {
     const char *jobId = payload["jobId"] | "";
     if (st.pull.busy() && st.otaJobId.equals(jobId)) {
@@ -442,6 +448,7 @@ void ClavdaOTAClass::loop() {
   }
 
   st.monitor.pump(st.link);
+  st.dash.pump(st.link);
 
   const uint32_t interval = st.otaJobId.length() ? HEARTBEAT_UPDATING_MS : HEARTBEAT_MS;
   if (st.link.online() && millis() - st.lastHeartbeat >= interval) sendHeartbeat();
