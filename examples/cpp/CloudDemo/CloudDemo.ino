@@ -41,8 +41,10 @@ bool wifiReported = false;
 bool clavdaReported = false;
 
 // Free heap after each step, to see what Wi-Fi and the Clavda connection each take.
+// With PSRAM turned on, most of it comes out of PSRAM instead of the internal heap.
 void printHeap(const char *step) {
-  Serial.printf("[heap] %-18s %u bytes free\n", step, (unsigned)ESP.getFreeHeap());
+  Serial.printf("[heap] %-18s %u bytes free, PSRAM %u bytes free\n", step,
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
 }
 
 void setup() {

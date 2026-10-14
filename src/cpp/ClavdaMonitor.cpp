@@ -182,7 +182,7 @@ void Monitor::input(JsonVariantConst payload, JsonDocument &reply) {
   }
   session->inSeq = seq;
   session->leaseUntil = millis() + LEASE_MS;
-  line[len] = 0;
+  line[len] = 0;  // onMessage() promises a terminated line; the C API passes it on as text
 
   reply["success"] = true;
   ClavdaSerial.deliver(line, len);

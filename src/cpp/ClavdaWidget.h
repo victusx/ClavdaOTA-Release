@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <functional>
+#include "../common/clavda_types.h"
 
 /** Longest text a widget holds; longer text is cut. Keeps every frame small. */
 #ifndef CLAVDA_WIDGET_MAX_TEXT
@@ -21,15 +22,6 @@
 #ifndef CLAVDA_DASH_POINTS
   #define CLAVDA_DASH_POINTS 64
 #endif
-
-/** How a status card colours its message: set("Door open", CLAVDA_WARNING). */
-enum ClavdaLevel : uint8_t {
-  CLAVDA_NEUTRAL = 0,
-  CLAVDA_INFO,
-  CLAVDA_SUCCESS,
-  CLAVDA_WARNING,
-  CLAVDA_DANGER,
-};
 
 namespace clavda {
 class Dash;

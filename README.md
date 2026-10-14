@@ -14,6 +14,8 @@ ClavdaOTA 2 connects an ESP32 to the Clavda relay, so it can be updated from the
 - 🛟 Refuses images for another chip, images too large for the OTA slot, and images that could not reconnect
 - ⏸️ `onUpdateRequest()` lets your application put an update off while it is busy
 - 🖥️ A remote Serial Monitor: print to `ClavdaSerial` and watch it live in the console, end-to-end encrypted
+- 📈 A live dashboard: cards, gauges, charts and controls built in the console, fed by `ClavdaWidget`, end-to-end encrypted
+- 🧩 A C API next to the C++ one, for firmware written in C - see [From C](#from-c)
 
 ## Supported MCUs
 
@@ -66,7 +68,7 @@ void loop() {
 4. Flash it over USB **once**. The device shows as online in the console.
 5. From then on: build a new version, open the device's **Connect** sheet, upload the `.bin` and press **Update now**.
 
-The full sketch is in [`examples/CloudDemo`](examples/CloudDemo/CloudDemo.ino).
+The full sketch is in [`examples/cpp/CloudDemo`](examples/cpp/CloudDemo/CloudDemo.ino), and in C in [`examples/c/CloudDemo`](examples/c/CloudDemo/cloud_demo.c).
 
 > [!WARNING]
 > `clavda_device.h` contains the device's token and job key. Keep it out of git - the library's `.gitignore` already lists it - and do not share it. Every download is recorded as a device notification in the console.
@@ -107,7 +109,90 @@ void loop() {
 - Typing into the device needs permission to edit devices; everyone who can see the device can watch.
 - `ClavdaSerial` is safe to print to from any task. Output printed while the device is offline is sent when it reconnects, as far as the buffer reaches; the console marks anything it missed.
 
-Coming from **WebSerial**: `begin()` takes an optional mirror instead of a web server, and `print`, `printf`, `onMessage()` work as before. There is no web page on the device and no port to open. The full sketch is in [`examples/SerialMonitor`](examples/SerialMonitor/SerialMonitor.ino).
+Coming from **WebSerial**: `begin()` takes an optional mirror instead of a web server, and `print`, `printf`, `onMessage()` work as before. There is no web page on the device and no port to open. The full sketch is in [`examples/cpp/SerialMonitor`](examples/cpp/SerialMonitor/SerialMonitor.ino), and in C in [`examples/c/SerialMonitor`](examples/c/SerialMonitor/serial_monitor.c).
+
+## Dashboard
+
+Build a dashboard for the device in the console - **Connect → Dashboard → Edit** - from value cards, gauges, status cards, line and bar charts, toggles, sliders, buttons and text inputs. Every widget there has an ID; a `ClavdaWidget` with the same ID feeds it:
+
+```cpp
+ClavdaWidget temperature("temperature");  // a Value or Gauge card
+ClavdaWidget history("temp_history");     // a Line chart
+ClavdaWidget relay("relay");              // a Toggle
+
+void setup() {
+  relay.onChange([](const ClavdaInput &in) { digitalWrite(RELAY_PIN, in.asBool()); });
+  // Wi-Fi, then:
+  ClavdaOTA.begin(CLAVDA_DEVICE);
+}
+
+void loop() {
+  ClavdaOTA.loop();
+  float celsius = readTemperature();
+  temperature.set(celsius);  // sent only when it changes
+  history.add(celsius);      // a chart point; the console times it, so no RTC is needed
+}
+```
+
+- The layout lives in the console, so it changes without reflashing. Each widget's settings show the line to paste, and **Firmware code** gives an outline for the whole dashboard. IDs the sketch sends that no widget shows yet are listed in edit mode, ready to add.
+- `set()` takes a number, a `bool`, or text; `set("Door open", CLAVDA_WARNING)` colours a status card. `setSeries(labels, values, n)` fills a bar chart. A control's new value is already the widget's when `onChange()` runs, and every open dashboard shows it.
+- Each open dashboard gets its own key, like a Serial Monitor, and the device only takes control input from people with permission to edit devices. Up to 3 dashboards can be open on one device.
+- Values are sent at most every 100 ms per dashboard, and only what changed. A widget costs about 70 bytes; line charts share a ring of the last 64 points (`CLAVDA_DASH_POINTS`), allocated on the first `add()`. Use widgets from `setup()` and `loop()`, not from other tasks.
+
+The full sketch is in [`examples/cpp/Dashboard`](examples/cpp/Dashboard/Dashboard.ino), and in C in [`examples/c/Dashboard`](examples/c/Dashboard/dashboard.c).
+
+## From C
+
+Firmware written in C uses the same library through its C API: plain functions, opaque handles for widgets, and function pointers with a `user` pointer for callbacks. Include `<ClavdaOTA.h>` from a `.c` file and you get the C API; from C++ you get the classes above, and can call the C functions too. The console's `clavda_device.h` works from either.
+
+```c
+#define CLAVDA_FIRMWARE_VERSION "1.0.0"
+#include <ClavdaOTA.h>
+#include "clavda_device.h"
+
+static clavda_widget_t *temperature;
+static clavda_widget_t *relay;
+
+static void on_relay(clavda_widget_t *w, const clavda_input_t *in, void *user) {
+  digitalWrite(RELAY_PIN, clavda_input_as_bool(in));
+}
+
+void app_setup(void) {
+  clavda_serial_begin(115200, 0);                // also starts Serial and prints there; 2 KB buffer
+  temperature = clavda_widget_create("temperature");
+  relay = clavda_widget_create("relay");
+  clavda_widget_on_change(relay, on_relay, NULL);
+
+  clavda_wifi_begin("ssid", "password");
+  clavda_begin(&CLAVDA_DEVICE);
+}
+
+void app_loop(void) {
+  clavda_loop();
+  clavda_widget_set_float(temperature, read_temperature());
+}
+```
+
+- The C API is a thin layer over the C++ implementation, so both behave the same and the library itself still compiles as C++. The Arduino IDE, PlatformIO, and ESP-IDF with the Arduino component all do that on their own; only your code needs to be C.
+- Start Wi-Fi with `clavda_wifi_begin()`: the library follows the connection through the Arduino Wi-Fi driver, which `esp_wifi_*` calls of your own would bypass.
+- A widget's ID is not copied - pass a string literal. Every function that takes a widget or an input accepts `NULL` and does nothing, so a widget that failed to allocate cannot crash the sketch.
+- Print with `clavda_serial_printf()` and friends: `clavda_serial_begin(115200, 0)` starts Serial itself, which C code cannot, and everything printed goes to USB and to the console's Serial Monitor.
+- In the Arduino IDE, `setup()` and `loop()` are called as C++, so a sketch in C keeps a short `.ino` that calls into the `.c` file. Every example comes in both languages: [`examples/c/`](examples/c) next to [`examples/cpp/`](examples/cpp).
+
+| C++ | C |
+| --- | --- |
+| `ClavdaOTA.begin(CLAVDA_DEVICE)` / `loop()` | `clavda_begin(&CLAVDA_DEVICE)` / `clavda_loop()` |
+| `ClavdaOTA.status()` / `deviceId()` / `firmwareVersion()` / `bundleMismatch()` | `clavda_status()` / `clavda_device_id()` / `clavda_firmware_version()` / `clavda_bundle_mismatch()` |
+| `ClavdaOTA.onUpdateRequest()` / `onStart()` / `onProgress()` / `onEnd()` | `clavda_on_update_request()` / `_start()` / `_progress()` / `_end()`, each `(callback, user)` |
+| `WiFi.begin(ssid, password)` | `clavda_wifi_begin(ssid, password)`, `clavda_wifi_connected()` |
+| `Serial.begin(115200)`, `ClavdaSerial.begin(&Serial, size)` | `clavda_serial_begin(115200, size)` - starts Serial and mirrors to it; `0` baud for no mirror, `0` size for the default |
+| `ClavdaSerial.print()` / `println()` / `printf()` / `write()` | `clavda_serial_print()` / `_println()` / `_printf()` / `_write()` |
+| `ClavdaSerial.onMessage(cb)` / `monitors()` | `clavda_serial_on_message(cb, user)` - the line arrives NUL-terminated / `clavda_serial_monitors()` |
+| `ClavdaWidget w("id")` | `clavda_widget_t *w = clavda_widget_create("id")`, `clavda_widget_free(w)` |
+| `w.set(number)` / `set(bool)` / `set(text)` / `set(text, level)` | `clavda_widget_set_number()` / `_float()` / `_int()` / `_bool()` / `_text()` / `_status()` |
+| `w.add(value)` / `w.setSeries(labels, values, n)` | `clavda_widget_add_point()` / `clavda_widget_set_series()` |
+| `w.onChange(cb)` | `clavda_widget_on_change(w, cb, user)` |
+| `in.asBool()` / `asInt()` / `asDouble()` / `asText()` | `clavda_input_as_bool(in)` / `_as_int()` / `_as_double()` / `_as_text()` |
 
 ## Memory
 
@@ -116,11 +201,23 @@ On a connected ESP32, nearly all the RAM that goes when ClavdaOTA starts is the 
 | What | RAM |
 | --- | --- |
 | The TLS connection to the relay | Roughly 35-40 KB of heap while connected. Arduino-ESP32 3.x builds mbedTLS with a fixed 16 KB receive buffer and a 16 KB send buffer per connection. |
-| ClavdaOTA itself | About 4.5 KB of static RAM (with its WebSockets and JSON dependencies) and 1-2 KB of heap. |
+| ClavdaOTA itself | About 5.5 KB of static RAM and in-RAM code on an ESP32-S3 (with its WebSockets and JSON dependencies) and 1-2 KB of heap. |
 | `ClavdaSerial`, if you start it | The buffer you give `begin()` - 2 KB by default - plus about 1.5 KB only while a monitor is open. |
 | An update in progress | A second TLS connection, to the firmware download, until the image is written. This is what the console's "lowest" free heap reflects. |
 
-Wi-Fi itself typically takes 40-60 KB of heap as well, in any sketch that connects. The [`CloudDemo`](examples/CloudDemo/CloudDemo.ino) example prints the free heap at boot, once Wi-Fi is up, and once the device reaches Clavda; the differences are what each step costs on your board.
+Wi-Fi itself typically takes 40-60 KB of heap as well, in any sketch that connects. The [`CloudDemo`](examples/cpp/CloudDemo/CloudDemo.ino) example prints the free heap at boot, once Wi-Fi is up, and once the device reaches Clavda; the differences are what each step costs on your board.
+
+Compared with a sketch that never uses Wi-Fi, such as Blink, part of the difference is there before `setup()` runs: on an ESP32-S3 with Arduino-ESP32 3.3, just linking Wi-Fi and TLS in costs about 29 KB of RAM (static data, plus the Wi-Fi code the core keeps in internal RAM).
+
+### Boards with PSRAM
+
+If the board has PSRAM (the R in module names like N8R2 or N16R8), turn it on: **Tools → PSRAM** in the Arduino IDE, OPI PSRAM for R8 modules and QSPI PSRAM for R2. With PSRAM on:
+
+- the core puts Wi-Fi and lwIP buffers there;
+- `ClavdaOTA.begin()` points mbedTLS at it, so the relay connection and an update's download connection stop using internal RAM. This applies to every TLS connection in the sketch;
+- `ClavdaSerial`'s buffer goes there too.
+
+`ESP.getFreeHeap()` counts internal RAM only; `ESP.getFreePsram()` shows what is left of the PSRAM.
 
 ### Smaller TLS buffers (PlatformIO)
 
@@ -179,8 +276,25 @@ The job travels encrypted with the device's own key, so the relay never sees the
 | `ClavdaSerial.print()` / `println()` / `printf()` / `write()` | A `Print`, like `Serial`. |
 | `ClavdaSerial.onMessage(cb)` | `void cb(const String &msg)` or `void cb(uint8_t *data, size_t len)` - a line typed in the console. |
 | `ClavdaSerial.monitors()` | How many Serial Monitors are open on this device. |
+| `ClavdaWidget w("id")` | A dashboard widget, named by its ID in the console. Declare it at global scope. |
+| `w.set(value)` / `w.set(text, level)` | Its value: a number, `bool` or text; a status card's message and `CLAVDA_INFO` / `_SUCCESS` / `_WARNING` / `_DANGER`. |
+| `w.add(value)` / `w.setSeries(labels, values, n)` | A line-chart point; a bar chart's bars. |
+| `w.onChange(cb)` | `void cb(const ClavdaInput &in)` - a toggle, slider, button or text input was used. `in.asBool()`, `asInt()`, `asFloat()`, `asText()`. |
 
 Diagnostics go through the ESP32 log: set **Tools → Core Debug Level → Info** to see them.
+
+## Library layout
+
+| Path | What is there |
+| --- | --- |
+| `src/ClavdaOTA.h` | The header to include, from C or C++. |
+| `src/clavda_ota.h` | The C API on its own. |
+| `src/common/` | Types and macros both APIs share, in plain C: the bundle, the firmware descriptor, `ClavdaStatus`, `ClavdaLevel`. |
+| `src/cpp/` | The implementation, and the C++ API. |
+| `src/c/` | The C API, on top of `src/cpp/`. |
+| `examples/cpp/` | `CloudDemo`, `SerialMonitor` and `Dashboard`, in C++. |
+| `examples/c/` | The same three in C: a short `.ino` that calls into the sketch's `.c` file. |
+| `test/` | On-device tests of both APIs; see [`test/README.md`](test/README.md). Kept out of `src/`, which is compiled into every sketch. |
 
 ## Contributing
 

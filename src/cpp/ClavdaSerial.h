@@ -44,7 +44,10 @@ class ClavdaSerialClass : public Print {
      */
     bool begin(Print *mirror = nullptr, size_t bufferSize = CLAVDA_SERIAL_BUFFER_SIZE);
 
-    /** A line typed in a console Serial Monitor, without a line ending. */
+    /**
+     * A line typed in a console Serial Monitor, without a line ending. The
+     * data is NUL-terminated (data[len] is 0), which the C API relies on.
+     */
     void onMessage(MessageHandler handler);
     void onMessage(StringMessageHandler handler);
 
