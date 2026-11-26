@@ -11,6 +11,7 @@
 
 #include "ClavdaCrypto.h"
 #include "ClavdaLink.h"
+#include "ClavdaPlatform.h"
 #include "ClavdaSerial.h"
 #include "ClavdaSession.h"
 
@@ -56,7 +57,7 @@ void Monitor::releaseIfIdle() {
 
 void Monitor::expire() {
   if (!_open) return;
-  const uint32_t now = millis();
+  const uint32_t now = nowMs();
   for (Session &s : _open->sessions) {
     if (s.active && (int32_t)(now - s.leaseUntil) > 0) close(s);
     // The last close frees the sessions this loop is walking.
@@ -79,7 +80,7 @@ bool Monitor::handle(const char *command, JsonVariantConst payload, Identity &id
 }
 
 void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &reply) {
-  auto refuse = [&reply](const char *code, const String &why) {
+  auto refuse = [&reply](const char *code, const std::string &why) {
     reply["success"] = false;
     reply["code"] = code;
     reply["error"] = why;
@@ -94,7 +95,7 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
   const char *sessionId = payload["sessionId"] | "";
   SessionGrant grant;
   const char *code = nullptr;
-  String why;
+  std::string why;
   if (!openSession("serial", "monitor session", sessionId, payload["enc"] | "", identity, grant,
                    code, why)) {
     return refuse(code, why);
@@ -117,9 +118,9 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
     }
     if (!session) {
       memset(grant.key, 0, sizeof(grant.key));
-      return refuse("busy", String(CLAVDA_SERIAL_MAX_SESSIONS) +
-                                " Serial Monitors are already open on this device. Close one and "
-                                "try again.");
+      return refuse("busy", format("%d Serial Monitors are already open on this device. Close "
+                                   "one and try again.",
+                                   (int)CLAVDA_SERIAL_MAX_SESSIONS));
     }
     session->active = true;
     strlcpy(session->id, sessionId, sizeof(session->id));
@@ -131,7 +132,7 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
   memcpy(session->key, grant.key, sizeof(session->key));
   memset(grant.key, 0, sizeof(grant.key));
   session->input = grant.input;
-  session->leaseUntil = millis() + LEASE_MS;
+  session->leaseUntil = nowMs() + LEASE_MS;
 
   // A console picking up where it left off - after its relay connection
   // dropped, say - gets exactly what it missed, if this boot still holds it.
@@ -158,7 +159,7 @@ void Monitor::start(JsonVariantConst payload, Identity &identity, JsonDocument &
 }
 
 void Monitor::input(JsonVariantConst payload, JsonDocument &reply) {
-  auto refuse = [&reply](const char *code, const String &why) {
+  auto refuse = [&reply](const char *code, const std::string &why) {
     reply["success"] = false;
     reply["code"] = code;
     reply["error"] = why;
@@ -177,11 +178,11 @@ void Monitor::input(JsonVariantConst payload, JsonDocument &reply) {
   uint8_t line[CLAVDA_SERIAL_MAX_INPUT + 1];
   size_t len = 0;
   if (!openBytes(session->key, payload["data"] | "", aad, line, CLAVDA_SERIAL_MAX_INPUT, len)) {
-    return refuse("invalid", String("The input did not verify, or is over ") +
-                                 CLAVDA_SERIAL_MAX_INPUT + " bytes");
+    return refuse("invalid", format("The input did not verify, or is over %d bytes",
+                                    (int)CLAVDA_SERIAL_MAX_INPUT));
   }
   session->inSeq = seq;
-  session->leaseUntil = millis() + LEASE_MS;
+  session->leaseUntil = nowMs() + LEASE_MS;
   line[len] = 0;  // onMessage() promises a terminated line; the C API passes it on as text
 
   reply["success"] = true;
@@ -199,7 +200,7 @@ void Monitor::pump(Link &link) {
   expire();
 
   size_t open = 0;
-  const uint32_t now = millis();
+  const uint32_t now = nowMs();
   if (_open) {
     for (Session &s : _open->sessions) {
       if (!s.active) continue;

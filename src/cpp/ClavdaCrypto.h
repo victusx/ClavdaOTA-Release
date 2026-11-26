@@ -1,8 +1,18 @@
 #ifndef ClavdaCrypto_h
 #define ClavdaCrypto_h
 
-#include <Arduino.h>
-#include "mbedtls/sha256.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <string>
+#include "mbedtls/version.h"
+// mbedTLS 4 (ESP-IDF 6) keeps its hash and cipher contexts private; the PSA
+// Crypto API is the public way in there. Older versions keep the classic API.
+#if MBEDTLS_VERSION_NUMBER >= 0x04000000
+  #define CLAVDA_PSA_CRYPTO 1
+  #include "psa/crypto.h"
+#else
+  #include "mbedtls/sha256.h"
+#endif
 
 namespace clavda {
 
@@ -28,7 +38,8 @@ bool isJobKey(const char *keyB64);
  * under the device's AES-256 job key - the framing the headless agent already
  * uses for SSH credentials. `plain` is filled only when the tag verifies.
  */
-bool openJob(const char *jobKeyB64, const char *sealedB64, String &plain, String &error);
+bool openJob(const char *jobKeyB64, const char *sealedB64, std::string &plain,
+             std::string &error);
 
 /** What sealBytes() adds to the plaintext: the IV in front, the tag behind. */
 const size_t SEAL_OVERHEAD = 12 + 16;
@@ -64,7 +75,11 @@ class Sha256 {
     void finishHex(char out[65]);
 
   private:
+#ifdef CLAVDA_PSA_CRYPTO
+    psa_hash_operation_t _op;
+#else
     mbedtls_sha256_context _ctx;
+#endif
 };
 
 }  // namespace clavda

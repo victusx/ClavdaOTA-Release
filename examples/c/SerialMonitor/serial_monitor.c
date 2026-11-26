@@ -5,7 +5,7 @@
   for monitors that open later - including the boot messages.
 */
 
-#include <Arduino.h>  // millis()
+#include "esp_timer.h"
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "esp_wifi.h"
@@ -24,7 +24,7 @@
 static const char *ssid = "";
 static const char *password = "";
 
-static unsigned long reportedAt = 0;
+static int64_t reportedAt = 0;  // esp_timer_get_time(): microseconds since boot
 
 /** The signal of the network joined, or 0 while not connected. */
 static int rssi(void) {
@@ -62,9 +62,10 @@ void app_setup(void) {
 void app_loop(void) {
   clavda_loop();
 
-  if (millis() - reportedAt > 2000) {
-    reportedAt = millis();
-    clavda_serial_printf("Uptime %lus, %u monitor(s) watching\n", millis() / 1000,
+  const int64_t now = esp_timer_get_time();
+  if (now - reportedAt > 2000000) {
+    reportedAt = now;
+    clavda_serial_printf("Uptime %lus, %u monitor(s) watching\n", (unsigned long)(now / 1000000),
                          (unsigned)clavda_serial_monitors());
   }
 }

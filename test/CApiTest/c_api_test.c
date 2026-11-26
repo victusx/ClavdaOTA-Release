@@ -4,7 +4,7 @@
   widgets and the Serial Monitor buffer.
 */
 
-#include <Arduino.h>
+#include <stdbool.h>
 #include <math.h>
 #include <string.h>
 

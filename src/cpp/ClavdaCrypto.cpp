@@ -1,12 +1,15 @@
 #include "ClavdaCrypto.h"
 
+#include <string.h>
 #include <memory>
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_idf_version.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/gcm.h"
 #include "mbedtls/platform.h"
-#include "mbedtls/version.h"
+#ifndef CLAVDA_PSA_CRYPTO
+  #include "mbedtls/gcm.h"
+#endif
 #if ESP_IDF_VERSION_MAJOR >= 5
   #include "esp_random.h"
 #else
@@ -66,7 +69,57 @@ bool isJobKey(const char *keyB64) {
   return ok;
 }
 
-bool openJob(const char *jobKeyB64, const char *sealedB64, String &plain, String &error) {
+/**
+ * AES-256-GCM with a 16-byte tag. Sealing turns `in` into ciphertext | tag in
+ * `out`; opening takes ciphertext | tag and writes the plaintext, only once
+ * the tag verifies. `aad` may be NULL.
+ */
+static bool aesGcm(bool seal, const uint8_t key[32], const uint8_t iv[12], const char *aad,
+                   const uint8_t *in, size_t inLen, uint8_t *out, size_t outCap) {
+  const size_t aadLen = aad ? strlen(aad) : 0;
+  if (!seal && inLen < TAG_LEN) return false;
+  if (outCap < (seal ? inLen + TAG_LEN : inLen - TAG_LEN)) return false;
+#ifdef CLAVDA_PSA_CRYPTO
+  if (psa_crypto_init() != PSA_SUCCESS) return false;
+  psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+  psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+  psa_set_key_bits(&attributes, KEY_LEN * 8);
+  psa_set_key_usage_flags(&attributes, seal ? PSA_KEY_USAGE_ENCRYPT : PSA_KEY_USAGE_DECRYPT);
+  psa_set_key_algorithm(&attributes, PSA_ALG_GCM);
+  mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
+  psa_status_t status = psa_import_key(&attributes, key, KEY_LEN, &id);
+  psa_reset_key_attributes(&attributes);
+  if (status != PSA_SUCCESS) return false;
+  size_t outLen = 0;
+  if (seal) {
+    status = psa_aead_encrypt(id, PSA_ALG_GCM, iv, IV_LEN, (const uint8_t *)aad, aadLen, in, inLen,
+                              out, outCap, &outLen);
+  } else {
+    status = psa_aead_decrypt(id, PSA_ALG_GCM, iv, IV_LEN, (const uint8_t *)aad, aadLen, in, inLen,
+                              out, outCap, &outLen);
+  }
+  psa_destroy_key(id);
+  return status == PSA_SUCCESS;
+#else
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, KEY_LEN * 8);
+  if (rc == 0 && seal) {
+    rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, inLen, iv, IV_LEN,
+                                   (const unsigned char *)aad, aadLen, in, out, TAG_LEN,
+                                   out + inLen);
+  } else if (rc == 0) {
+    const size_t ctLen = inLen - TAG_LEN;
+    rc = mbedtls_gcm_auth_decrypt(&gcm, ctLen, iv, IV_LEN, (const unsigned char *)aad, aadLen,
+                                  in + ctLen, TAG_LEN, in, out);
+  }
+  mbedtls_gcm_free(&gcm);
+  return rc == 0;
+#endif
+}
+
+bool openJob(const char *jobKeyB64, const char *sealedB64, std::string &plain,
+             std::string &error) {
   uint8_t key[KEY_LEN + 4];
   size_t keyLen = 0;
   if (!base64Decode(jobKeyB64, key, sizeof(key), keyLen) || keyLen != KEY_LEN) {
@@ -98,48 +151,25 @@ bool openJob(const char *jobKeyB64, const char *sealedB64, String &plain, String
   }
 
   const size_t ctLen = rawLen - IV_LEN - TAG_LEN;
-  const uint8_t *iv = raw.get();
-  const uint8_t *ct = raw.get() + IV_LEN;
-  const uint8_t *tag = raw.get() + IV_LEN + ctLen;
-
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, KEY_LEN * 8);
-  if (rc == 0) {
-    rc = mbedtls_gcm_auth_decrypt(&gcm, ctLen, iv, IV_LEN, nullptr, 0, tag, TAG_LEN, ct, out.get());
-  }
-  mbedtls_gcm_free(&gcm);
+  const bool ok =
+    aesGcm(false, key, raw.get(), nullptr, raw.get() + IV_LEN, rawLen - IV_LEN, out.get(), cap);
   memset(key, 0, sizeof(key));
-
-  if (rc != 0) {
+  if (!ok) {
     // Wrong key and tampered ciphertext look the same from here.
     error = "The job did not verify: it was not sealed for this device";
     return false;
   }
 
-  out[ctLen] = 0;
-  plain = String((const char *)out.get());
+  plain.assign((const char *)out.get(), ctLen);
   return true;
 }
 
 bool sealBytes(const uint8_t key[32], const uint8_t *plain, size_t len, const char *aad,
                uint8_t *out) {
-  uint8_t *iv = out;
-  uint8_t *ct = out + IV_LEN;
-  uint8_t *tag = out + IV_LEN + len;
   // A fresh random nonce per frame; a session key never sees anywhere near
   // the 2^32 frames where that would start to matter.
-  esp_fill_random(iv, IV_LEN);
-
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, KEY_LEN * 8);
-  if (rc == 0) {
-    rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, len, iv, IV_LEN,
-                                   (const unsigned char *)aad, strlen(aad), plain, ct, TAG_LEN, tag);
-  }
-  mbedtls_gcm_free(&gcm);
-  return rc == 0;
+  esp_fill_random(out, IV_LEN);
+  return aesGcm(true, key, out, aad, plain, len, out + IV_LEN, len + TAG_LEN);
 }
 
 bool openBytes(const uint8_t key[32], const char *sealedB64, const char *aad, uint8_t *out,
@@ -156,17 +186,9 @@ bool openBytes(const uint8_t key[32], const char *sealedB64, const char *aad, ui
   }
   const size_t ctLen = rawLen - IV_LEN - TAG_LEN;
   if (ctLen > outCap) return false;
-
-  mbedtls_gcm_context gcm;
-  mbedtls_gcm_init(&gcm);
-  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, KEY_LEN * 8);
-  if (rc == 0) {
-    rc = mbedtls_gcm_auth_decrypt(&gcm, ctLen, raw.get(), IV_LEN, (const unsigned char *)aad,
-                                  strlen(aad), raw.get() + IV_LEN + ctLen, TAG_LEN,
-                                  raw.get() + IV_LEN, out);
+  if (!aesGcm(false, key, raw.get(), aad, raw.get() + IV_LEN, rawLen - IV_LEN, out, outCap)) {
+    return false;
   }
-  mbedtls_gcm_free(&gcm);
-  if (rc != 0) return false;
   outLen = ctLen;
   return true;
 }
@@ -183,6 +205,27 @@ bool tlsPreferPsram() {
 #endif
 }
 
+#ifdef CLAVDA_PSA_CRYPTO
+
+Sha256::Sha256() : _op(PSA_HASH_OPERATION_INIT) {}
+
+Sha256::~Sha256() {
+  psa_hash_abort(&_op);
+}
+
+void Sha256::begin() {
+  psa_crypto_init();
+  psa_hash_abort(&_op);
+  _op = PSA_HASH_OPERATION_INIT;
+  psa_hash_setup(&_op, PSA_ALG_SHA_256);
+}
+
+void Sha256::update(const uint8_t *data, size_t len) {
+  psa_hash_update(&_op, data, len);
+}
+
+#else
+
 Sha256::Sha256() {
   mbedtls_sha256_init(&_ctx);
 }
@@ -196,24 +239,33 @@ Sha256::~Sha256() {
 void Sha256::begin() {
   mbedtls_sha256_free(&_ctx);
   mbedtls_sha256_init(&_ctx);
-#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+  #if MBEDTLS_VERSION_NUMBER >= 0x03000000
   mbedtls_sha256_starts(&_ctx, 0);
-#else
+  #else
   mbedtls_sha256_starts_ret(&_ctx, 0);
-#endif
+  #endif
 }
 
 void Sha256::update(const uint8_t *data, size_t len) {
-#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+  #if MBEDTLS_VERSION_NUMBER >= 0x03000000
   mbedtls_sha256_update(&_ctx, data, len);
-#else
+  #else
   mbedtls_sha256_update_ret(&_ctx, data, len);
-#endif
+  #endif
 }
 
+#endif
+
 void Sha256::finishHex(char out[65]) {
-  uint8_t digest[32];
-#if MBEDTLS_VERSION_NUMBER >= 0x03000000
+  uint8_t digest[32] = {0};
+#ifdef CLAVDA_PSA_CRYPTO
+  size_t digestLen = 0;
+  if (psa_hash_finish(&_op, digest, sizeof(digest), &digestLen) != PSA_SUCCESS) {
+    // An empty digest matches no job's SHA-256, so the image is refused.
+    out[0] = 0;
+    return;
+  }
+#elif MBEDTLS_VERSION_NUMBER >= 0x03000000
   mbedtls_sha256_finish(&_ctx, digest);
 #else
   mbedtls_sha256_finish_ret(&_ctx, digest);

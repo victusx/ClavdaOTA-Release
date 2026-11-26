@@ -1,0 +1,8 @@
+# Two app slots, so the board can take an update over the air.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# app_main() runs ClavdaOTA's loop, and with it the TLS handshakes, which
+# need more stack than the 3.5 KB the main task gets by default.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

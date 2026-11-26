@@ -1,7 +1,8 @@
 #ifndef ClavdaDash_h
 #define ClavdaDash_h
 
-#include <Arduino.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <ArduinoJson.h>
 #include "ClavdaIdentity.h"
 #include "ClavdaWidget.h"

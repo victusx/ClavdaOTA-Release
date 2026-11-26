@@ -1,7 +1,7 @@
 {
   "name": "ClavdaOTA",
-  "keywords": "ClavdaOTA, OTA, Update, ESP32, over, the, air, firmware, cloud, remote, fleet",
-  "description": "Over-the-air firmware updates for the ESP32 family from anywhere. The device dials out to the Clavda relay, so it can be updated from the Clavda console behind NAT and firewalls, with no open port.",
+  "keywords": "ClavdaOTA, OTA, Update, ESP32, over, the, air, firmware, cloud, remote, fleet, esp-idf",
+  "description": "Over-the-air firmware updates for the ESP32 family from anywhere. The device dials out to the Clavda relay, so it can be updated from the Clavda console behind NAT and firewalls, with no open port. Builds with the Arduino framework and with ESP-IDF.",
   "repository": {
     "type": "git",
     "url": "https://github.com/victusx/ClavdaOTA-Release.git"
@@ -15,18 +15,13 @@
   ],
   "dependencies": [
     {
-      "owner": "links2004",
-      "name": "WebSockets",
-      "version": "^2.6.1"
-    },
-    {
       "owner": "bblanchon",
       "name": "ArduinoJson",
       "version": "^7.0.0"
     }
   ],
-  "version": "2.2.0",
-  "frameworks": "arduino",
+  "version": "2.3.0",
+  "frameworks": ["arduino", "espidf"],
   "platforms": [
     "espressif32"
   ]

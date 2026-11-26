@@ -4,8 +4,9 @@
  * The same library as the C++ API - updates, the Serial Monitor and the
  * dashboard - called as plain C functions, for firmware written in C. It is
  * built on the C++ implementation, so the project still compiles that part
- * as C++ (Arduino IDE, PlatformIO and ESP-IDF with the Arduino component all
- * do); the code that includes this header can be pure C.
+ * as C++ (the Arduino IDE, PlatformIO and ESP-IDF all do); the code that
+ * includes this header can be pure C. Under ESP-IDF, call these from
+ * app_main() or the task it starts, as examples/idf/CloudDemo does.
  *
  *   #define CLAVDA_FIRMWARE_VERSION "1.0.0"
  *   #include <ClavdaOTA.h>          // from a .c file, this header
@@ -78,24 +79,33 @@ void clavda_on_update_end(clavda_update_end_fn callback, void *user);
 /* ---- Wi-Fi ------------------------------------------------------------- */
 
 /**
- * Join a network as a station. The library tracks the connection through the
- * Arduino Wi-Fi driver, so start Wi-Fi with this rather than with esp_wifi_*
- * calls of your own. It reconnects by itself; there is nothing to call again.
+ * Join a network as a station; it reconnects by itself, so there is nothing
+ * to call again. On the Arduino core this goes through the Arduino WiFi
+ * library. Under ESP-IDF it initialises NVS, esp_netif, the default event
+ * loop and the Wi-Fi driver; an application that sets those up itself should
+ * connect its own way instead, since the library only needs the network up.
  */
 void clavda_wifi_begin(const char *ssid, const char *password);
+/** The network - Wi-Fi, or an interface the application set up - is up with an address. */
 bool clavda_wifi_connected(void);
 
 /* ---- Serial Monitor ---------------------------------------------------- */
 
 /**
  * Start the buffer that console Serial Monitors read from. A `mirror_baud`
- * other than 0 also starts Serial (the USB port) at that rate and sends
- * everything printed there too, so C code needs no Serial.begin() and can
- * log through this alone; 0 leaves Serial alone. `buffer_size` 0 means
- * CLAVDA_SERIAL_BUFFER_SIZE (2 KB). Returns false if the buffer could not be
- * allocated.
+ * other than 0 also sends everything printed to the USB port: on the Arduino
+ * core it starts Serial at that rate, so C code needs no Serial.begin() and
+ * can log through this alone; under ESP-IDF it writes to stdout, the console
+ * ESP-IDF already set up, and the rate is ignored. 0 prints nowhere else.
+ * `buffer_size` 0 means CLAVDA_SERIAL_BUFFER_SIZE (2 KB). Returns false if
+ * the buffer could not be allocated.
  */
 bool clavda_serial_begin(unsigned long mirror_baud, size_t buffer_size);
+/**
+ * Also send ESP-IDF's log output (ESP_LOGx, and the system's own messages) to
+ * the console's Serial Monitor; it still reaches the USB console as before.
+ */
+void clavda_serial_capture_logs(bool on);
 size_t clavda_serial_write(const void *data, size_t len);
 size_t clavda_serial_print(const char *text);
 /** clavda_serial_print() and a line ending. */

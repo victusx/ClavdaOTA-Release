@@ -1,0 +1,35 @@
+version: "2.3.0"
+description: >-
+  Over-the-air firmware updates, a remote Serial Monitor and a live dashboard
+  for the ESP32 family, from anywhere. The device dials out to the Clavda
+  relay, so it works behind NAT and firewalls with no open port.
+url: "https://github.com/victusx/ClavdaOTA-Release"
+repository: "https://github.com/victusx/ClavdaOTA-Release.git"
+license: "AGPL-3.0"
+tags:
+  - ota
+  - firmware-update
+  - remote-management
+  - websocket
+targets:
+  - esp32
+  - esp32s2
+  - esp32s3
+  - esp32c3
+  - esp32c6
+dependencies:
+  idf: ">=4.4"
+  bblanchon/arduinojson: "^7.0.0"
+examples:
+  - path: examples/idf/CloudDemo
+  - path: examples/idf/SerialMonitor
+  - path: examples/idf/Dashboard
+files:
+  exclude:
+    - "examples/**/build/**"
+    - "examples/**/managed_components/**"
+    - "examples/**/dependencies.lock"
+    - "examples/**/sdkconfig"
+    - "examples/**/sdkconfig.old"
+    - "test/**"
+    - ".pio/**"

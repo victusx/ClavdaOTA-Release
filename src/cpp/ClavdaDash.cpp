@@ -11,6 +11,7 @@
 
 #include "ClavdaCrypto.h"
 #include "ClavdaLink.h"
+#include "ClavdaPlatform.h"
 #include "ClavdaSession.h"
 
 namespace clavda {
@@ -59,7 +60,7 @@ void Dash::releaseIfIdle() {
 
 void Dash::expire() {
   if (!_open) return;
-  const uint32_t now = millis();
+  const uint32_t now = nowMs();
   for (Session &s : _open->sessions) {
     if (s.active && (int32_t)(now - s.leaseUntil) > 0) close(s);
     // The last close frees the sessions this loop is walking.
@@ -82,7 +83,7 @@ bool Dash::handle(const char *command, JsonVariantConst payload, Identity &ident
 }
 
 void Dash::start(JsonVariantConst payload, Identity &identity, JsonDocument &reply) {
-  auto refuse = [&reply](const char *code, const String &why) {
+  auto refuse = [&reply](const char *code, const std::string &why) {
     reply["success"] = false;
     reply["code"] = code;
     reply["error"] = why;
@@ -91,7 +92,7 @@ void Dash::start(JsonVariantConst payload, Identity &identity, JsonDocument &rep
   const char *sessionId = payload["sessionId"] | "";
   SessionGrant grant;
   const char *code = nullptr;
-  String why;
+  std::string why;
   if (!openSession("dash", "dashboard session", sessionId, payload["enc"] | "", identity, grant,
                    code, why)) {
     return refuse(code, why);
@@ -114,9 +115,9 @@ void Dash::start(JsonVariantConst payload, Identity &identity, JsonDocument &rep
     }
     if (!session) {
       memset(grant.key, 0, sizeof(grant.key));
-      return refuse("busy", String(CLAVDA_DASH_MAX_SESSIONS) +
-                                " dashboards are already open on this device. Close one and try "
-                                "again.");
+      return refuse("busy", format("%d dashboards are already open on this device. Close one "
+                                   "and try again.",
+                                   (int)CLAVDA_DASH_MAX_SESSIONS));
     }
     session->active = true;
     strlcpy(session->id, sessionId, sizeof(session->id));
@@ -125,7 +126,7 @@ void Dash::start(JsonVariantConst payload, Identity &identity, JsonDocument &rep
   memcpy(session->key, grant.key, sizeof(session->key));
   memset(grant.key, 0, sizeof(grant.key));
   session->input = grant.input;
-  session->leaseUntil = millis() + LEASE_MS;
+  session->leaseUntil = nowMs() + LEASE_MS;
   // A console that may have missed frames - its relay connection dropped,
   // say - asks for everything again.
   if (payload["full"] | false) {
@@ -142,7 +143,7 @@ void Dash::start(JsonVariantConst payload, Identity &identity, JsonDocument &rep
 }
 
 void Dash::input(JsonVariantConst payload, JsonDocument &reply) {
-  auto refuse = [&reply](const char *code, const String &why) {
+  auto refuse = [&reply](const char *code, const std::string &why) {
     reply["success"] = false;
     reply["code"] = code;
     reply["error"] = why;
@@ -166,7 +167,7 @@ void Dash::input(JsonVariantConst payload, JsonDocument &reply) {
     return refuse("invalid", "The input did not verify, or is too long");
   }
   session->inSeq = seq;
-  session->leaseUntil = millis() + LEASE_MS;
+  session->leaseUntil = nowMs() + LEASE_MS;
 
   JsonDocument doc;
   if (deserializeJson(doc, (const char *)plain, len)) return refuse("invalid", "Malformed input");
@@ -174,7 +175,7 @@ void Dash::input(JsonVariantConst payload, JsonDocument &reply) {
   ClavdaWidget *widget = ClavdaWidget::_head;
   while (widget && strcmp(widget->_id, id)) widget = widget->_next;
   if (!widget) {
-    return refuse("unknown_widget", String("This firmware has no widget \"") + id + "\"");
+    return refuse("unknown_widget", std::string("This firmware has no widget \"") + id + "\"");
   }
 
   // The widget takes the value first, so every open dashboard shows it even
@@ -211,7 +212,7 @@ void Dash::pump(Link &link) {
   expire();
   if (!_open || !link.online()) return;
 
-  const uint32_t now = millis();
+  const uint32_t now = nowMs();
   for (Session &s : _open->sessions) {
     if (!s.active || now - s.lastFlush < FLUSH_MS) continue;
     Place place = s.place;

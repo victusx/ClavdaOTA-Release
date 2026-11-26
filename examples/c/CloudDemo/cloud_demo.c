@@ -7,7 +7,7 @@
   console's Serial Monitor alike.
 */
 
-#include <Arduino.h>  // millis()
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 
 // Your application's version. Letters, digits and . _ + - only, up to 31 characters.
@@ -25,7 +25,7 @@
 static const char *ssid = "";
 static const char *password = "";
 
-static unsigned long progressPrintedAt = 0;
+static int64_t progressPrintedAt = 0;  // esp_timer_get_time(): microseconds since boot
 static bool wifiReported = false;
 static bool clavdaReported = false;
 
@@ -44,8 +44,9 @@ static void onStart(void *user) {
 
 static void onProgress(size_t current, size_t total, void *user) {
   (void)user;
-  if (millis() - progressPrintedAt > 1000) {
-    progressPrintedAt = millis();
+  const int64_t now = esp_timer_get_time();
+  if (now - progressPrintedAt > 1000000) {
+    progressPrintedAt = now;
     clavda_serial_printf("Update progress: %u of %u bytes\n", (unsigned)current, (unsigned)total);
   }
 }

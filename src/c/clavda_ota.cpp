@@ -7,8 +7,22 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <WiFi.h>
+#include <string.h>
 #include "../cpp/ClavdaOTA.h"
+#include "../cpp/ClavdaPlatform.h"
+
+#if CLAVDA_ARDUINO
+  // Serial and the WiFi library: only on the Arduino core, where they exist.
+  #include <Arduino.h>
+  #include <WiFi.h>
+#else
+  #include "esp_event.h"
+  #include "esp_netif.h"
+  #include "soc/soc_caps.h"
+  #if SOC_WIFI_SUPPORTED
+    #include "esp_wifi.h"
+  #endif
+#endif
 
 // ---- Updates ----
 
@@ -62,22 +76,91 @@ void clavda_on_update_end(clavda_update_end_fn callback, void *user) {
 
 // ---- Wi-Fi ----
 
+#if CLAVDA_ARDUINO
+
 void clavda_wifi_begin(const char *ssid, const char *password) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 }
 
+#elif SOC_WIFI_SUPPORTED
+
+static void onWifiEvent(void *, esp_event_base_t base, int32_t id, void *) {
+  // Connect once the driver is up, and again after every drop.
+  if (base == WIFI_EVENT && (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED)) {
+    esp_wifi_connect();
+  }
+}
+
+/** Set-up calls the application may already have made are fine to repeat. */
+static bool okOrDone(esp_err_t err, const char *what) {
+  if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) return true;
+  CLAVDA_LOGE("Wi-Fi: %s failed: %s", what, esp_err_to_name(err));
+  return false;
+}
+
+void clavda_wifi_begin(const char *ssid, const char *password) {
+  static bool started = false;
+  if (!clavda::nvsReady()) return;
+  if (!started) {
+    if (!okOrDone(esp_netif_init(), "esp_netif_init") ||
+        !okOrDone(esp_event_loop_create_default(), "esp_event_loop_create_default")) {
+      return;
+    }
+    if (!esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) esp_netif_create_default_wifi_sta();
+    wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+    if (!okOrDone(esp_wifi_init(&init), "esp_wifi_init")) return;
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, onWifiEvent, nullptr,
+                                        nullptr);
+    esp_wifi_set_mode(WIFI_MODE_STA);
+  }
+
+  wifi_config_t config = {};
+  // A 32-byte SSID or a 64-character key fills its field with no terminator.
+  if (ssid) memcpy(config.sta.ssid, ssid, strnlen(ssid, sizeof(config.sta.ssid)));
+  if (password) {
+    memcpy(config.sta.password, password, strnlen(password, sizeof(config.sta.password)));
+  }
+  // With a password, an open network of the same name will not do.
+  if (password && password[0]) config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+  if (!okOrDone(esp_wifi_set_config(WIFI_IF_STA, &config), "esp_wifi_set_config")) return;
+
+  if (!started) {
+    started = okOrDone(esp_wifi_start(), "esp_wifi_start");
+  } else {
+    // Another network: leave this one, and the disconnect handler joins the new one.
+    esp_wifi_disconnect();
+  }
+}
+
+#else
+
+void clavda_wifi_begin(const char *, const char *) {
+  CLAVDA_LOGE("This chip has no Wi-Fi; bring the network up with esp_netif yourself");
+}
+
+#endif
+
 bool clavda_wifi_connected(void) {
-  return WiFi.status() == WL_CONNECTED;
+  return clavda::networkUp();
 }
 
 // ---- Serial Monitor ----
 
 bool clavda_serial_begin(unsigned long mirror_baud, size_t buffer_size) {
+  const size_t size = buffer_size ? buffer_size : CLAVDA_SERIAL_BUFFER_SIZE;
+#if CLAVDA_ARDUINO
   // Serial drops writes until it is started, and C cannot start it.
   if (mirror_baud) Serial.begin(mirror_baud);
-  return ClavdaSerial.begin(mirror_baud ? &Serial : nullptr,
-                            buffer_size ? buffer_size : CLAVDA_SERIAL_BUFFER_SIZE);
+  return ClavdaSerial.begin(mirror_baud ? &Serial : nullptr, size);
+#else
+  // ESP-IDF set its console up already, at the rate chosen in menuconfig.
+  return ClavdaSerial.begin(mirror_baud != 0, size);
+#endif
+}
+
+void clavda_serial_capture_logs(bool on) {
+  ClavdaSerial.captureLogs(on);
 }
 
 size_t clavda_serial_write(const void *data, size_t len) {

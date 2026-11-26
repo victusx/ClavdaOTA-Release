@@ -1,7 +1,10 @@
 #include "ClavdaWidget.h"
 
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "esp_heap_caps.h"
+#include "ClavdaPlatform.h"
 
 ClavdaWidget *ClavdaWidget::_head = nullptr;
 uint32_t ClavdaWidget::_generation = 0;
@@ -96,8 +99,7 @@ void ClavdaWidget::setText(const char *text, ClavdaLevel level) {
   }
   _kind = TEXT;
   _level = level;
-  _text = String();
-  _text.concat(text, len);
+  _text.assign(text, len);
   changed();
 }
 
@@ -108,11 +110,11 @@ void ClavdaWidget::add(float value) {
                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
                                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!_points) {
-      log_e("[ClavdaOTA] No memory for chart points");
+      CLAVDA_LOGE("No memory for chart points");
       return;
     }
   }
-  _points[_pointHead % CLAVDA_DASH_POINTS] = {this, value, millis()};
+  _points[_pointHead % CLAVDA_DASH_POINTS] = {this, value, clavda::nowMs()};
   _pointHead++;
 }
 

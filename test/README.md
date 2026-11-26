@@ -30,3 +30,24 @@ arduino-cli monitor -p COM5 -c baudrate=115200
 
 Compiling alone - every example and both tests - is a quick check that the
 C header still builds as C and the C++ headers as C++.
+
+## ESP-IDF
+
+The tests are Arduino sketches. Under ESP-IDF, building
+the projects in [`examples/idf/`](../examples/idf) is the check that the
+library compiles as a component without the Arduino core:
+
+```sh
+cd examples/idf/CloudDemo
+idf.py set-target esp32c3
+idf.py build
+```
+
+On Windows, keep the build folder's path short (`idf.py -B C:\b\clavda build`):
+mbedTLS's object paths are long enough to pass the 260-character limit when
+the project sits deep in a user folder.
+
+The component manager writes `managed_components/` and `dependencies.lock`
+into the example's folder, and `idf.py` an `sdkconfig` next to them unless
+`-D SDKCONFIG=` points elsewhere. All are in `.gitignore`; delete them when
+you are done.

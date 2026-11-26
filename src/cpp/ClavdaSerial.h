@@ -1,9 +1,10 @@
 #ifndef ClavdaSerial_h
 #define ClavdaSerial_h
 
-#include <Arduino.h>
 #include <functional>
+#include <string>
 #include "freertos/FreeRTOS.h"
+#include "ClavdaPrint.h"
 
 /**
  * Output kept for monitors that open late, or after a reboot - about 30 lines
@@ -32,9 +33,10 @@ class Monitor;
  *
  * Safe to print to from any task.
  */
-class ClavdaSerialClass : public Print {
+class ClavdaSerialClass : public ClavdaPrint {
   public:
     using MessageHandler = std::function<void(uint8_t *data, size_t len)>;
+#if CLAVDA_ARDUINO
     using StringMessageHandler = std::function<void(const String &msg)>;
 
     /**
@@ -43,6 +45,23 @@ class ClavdaSerialClass : public Print {
      * Returns false if the buffer could not be allocated.
      */
     bool begin(Print *mirror = nullptr, size_t bufferSize = CLAVDA_SERIAL_BUFFER_SIZE);
+#else
+    using StringMessageHandler = std::function<void(const std::string &msg)>;
+
+    /**
+     * Allocate the buffer. With `mirror`, everything printed also goes to
+     * stdout - the USB or UART console - so a cable still shows it. Returns
+     * false if the buffer could not be allocated.
+     */
+    bool begin(bool mirror = true, size_t bufferSize = CLAVDA_SERIAL_BUFFER_SIZE);
+#endif
+
+    /**
+     * Also send ESP-IDF's log output (ESP_LOGx, and the system's own messages)
+     * to the console's Serial Monitor; it still goes to the USB or UART
+     * console as before. Off again with captureLogs(false).
+     */
+    void captureLogs(bool on = true);
 
     /**
      * A line typed in a console Serial Monitor, without a line ending. The
@@ -56,11 +75,15 @@ class ClavdaSerialClass : public Print {
 
     size_t write(uint8_t c) override;
     size_t write(const uint8_t *buffer, size_t size) override;
-    using Print::write;
+    using ClavdaPrint::write;
 
   private:
     friend class clavda::Monitor;
 
+    /** Installed by captureLogs(): ESP-IDF's vprintf, teed into the buffer. */
+    static int logHook(const char *format, va_list args);
+    /** Into the ring buffer only, not the mirror. */
+    void record(const uint8_t *buffer, size_t size);
     /** Offset of the oldest byte still buffered, and of the next one to be written. */
     void window(uint64_t &oldest, uint64_t &head);
     /**
@@ -74,7 +97,11 @@ class ClavdaSerialClass : public Print {
     size_t _cap = 0;
     /** Bytes ever written; the buffer holds the last min(_head, _cap) of them. */
     uint64_t _head = 0;
+#if CLAVDA_ARDUINO
     Print *_mirror = nullptr;
+#else
+    bool _mirror = false;
+#endif
     MessageHandler _onMessage;
     StringMessageHandler _onString;
     size_t _monitors = 0;

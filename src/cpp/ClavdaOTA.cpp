@@ -1,23 +1,19 @@
 #include "ClavdaOTA.h"
 
-#include <ArduinoJson.h>
-#include <WiFi.h>
+#include <ctype.h>
+#include <string.h>
 #include <time.h>
-#include "esp_idf_version.h"
+#include <string>
+#include <ArduinoJson.h>
 #include "esp_ota_ops.h"
 #include "esp_system.h"
-#include "esp_timer.h"
-#if ESP_IDF_VERSION_MAJOR >= 5
-  #include "esp_sntp.h"
-#else
-  #include "lwip/apps/sntp.h"
-#endif
 
 #include "ClavdaCrypto.h"
 #include "ClavdaDash.h"
 #include "ClavdaIdentity.h"
 #include "ClavdaLink.h"
 #include "ClavdaMonitor.h"
+#include "ClavdaPlatform.h"
 #include "ClavdaPull.h"
 
 using namespace clavda;
@@ -41,10 +37,11 @@ struct State {
   Dash dash;
 
   const ClavdaBundle *bundle = nullptr;
-  String firmwareVersion;
+  std::string firmwareVersion;
   ClavdaStatus status = CLAVDA_UNPROVISIONED;
+  bool clockStarted = false;
 
-  String otaJobId;  // the job in flight, if any
+  std::string otaJobId;  // the job in flight, if any
   Pull::Phase reportedPhase = Pull::IDLE;
   uint32_t lastProgress = 0;
   uint32_t lastHeartbeat = 0;
@@ -79,14 +76,6 @@ bool isHex64(const char *s) {
   return true;
 }
 
-bool sntpRunning() {
-#if ESP_IDF_VERSION_MAJOR >= 5
-  return esp_sntp_enabled();
-#else
-  return sntp_enabled();
-#endif
-}
-
 const char *resetReasonName(esp_reset_reason_t reason) {
   switch (reason) {
     case ESP_RST_POWERON: return "power-on";
@@ -113,7 +102,7 @@ const char *otaPhaseName(Pull::Phase phase) {
   }
 }
 
-String authJson() {
+std::string authJson() {
   JsonDocument doc;
   doc["token"] = st.identity.token();
   doc["clientVersion"] = CLAVDA_LIB_VERSION;
@@ -123,7 +112,7 @@ String authJson() {
   JsonObject bundle = doc["bundle"].to<JsonObject>();
   bundle["gen"] = st.identity.generation();
   bundle["mismatch"] = st.identity.mismatch();
-  String out;
+  std::string out;
   serializeJson(doc, out);
   return out;
 }
@@ -133,7 +122,7 @@ void sendToWeb(const char *type, const char *requestId, JsonDocument &payload) {
   msg["type"] = type;
   if (requestId && requestId[0]) msg["requestId"] = requestId;
   msg["payload"] = payload;
-  String out;
+  std::string out;
   serializeJson(msg, out);
   st.link.emit("send_to_web", out);
 }
@@ -147,10 +136,10 @@ void sendHeartbeat() {
   if (!st.link.online()) return;
   JsonDocument doc;
   JsonObject metrics = doc["metrics"].to<JsonObject>();
-  metrics["heap"] = ESP.getFreeHeap();
-  metrics["heapMin"] = ESP.getMinFreeHeap();
-  metrics["rssi"] = WiFi.RSSI();
-  metrics["uptime"] = (uint32_t)(esp_timer_get_time() / 1000000);
+  metrics["heap"] = freeHeap();
+  metrics["heapMin"] = minFreeHeap();
+  metrics["rssi"] = wifiRssi();
+  metrics["uptime"] = uptimeSeconds();
   doc["clientVersion"] = CLAVDA_LIB_VERSION;
   doc["firmwareVersion"] = st.firmwareVersion;
   doc["kind"] = "mcu";
@@ -158,32 +147,32 @@ void sendHeartbeat() {
   JsonObject bundle = doc["bundle"].to<JsonObject>();
   bundle["gen"] = st.identity.generation();
   bundle["mismatch"] = st.identity.mismatch();
-  if (st.otaJobId.length()) {
+  if (!st.otaJobId.empty()) {
     JsonObject ota = doc["ota"].to<JsonObject>();
     ota["jobId"] = st.otaJobId;
     ota["phase"] = otaPhaseName(st.pull.phase());
     ota["pct"] = otaPercent();
   }
-  String out;
+  std::string out;
   serializeJson(doc, out);
   st.link.emit("heartbeat", out);
-  st.lastHeartbeat = millis();
+  st.lastHeartbeat = nowMs();
 }
 
 void reportProgress(bool force) {
   const Pull::Phase phase = st.pull.phase();
-  if (!force && millis() - st.lastProgress < PROGRESS_MS) return;
+  if (!force && nowMs() - st.lastProgress < PROGRESS_MS) return;
   JsonDocument payload;
   payload["jobId"] = st.otaJobId;
   payload["phase"] = otaPhaseName(phase);
   payload["written"] = st.pull.written();
   payload["total"] = st.pull.job().size;
   sendToWeb("ota_progress", nullptr, payload);
-  st.lastProgress = millis();
+  st.lastProgress = nowMs();
   st.reportedPhase = phase;
 }
 
-void sendResult(bool ok, const String &error) {
+void sendResult(bool ok, const std::string &error) {
   JsonDocument payload;
   payload["jobId"] = st.otaJobId;
   payload["ok"] = ok;
@@ -195,28 +184,31 @@ void sendResult(bool ok, const String &error) {
 void fillDeviceInfo(JsonDocument &reply) {
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+  ChipInfo chip;
+  chipInfo(chip);
   reply["success"] = true;
   reply["kind"] = "mcu";
   reply["chip"] = CLAVDA_CHIP;
-  reply["chipModel"] = ESP.getChipModel();
-  reply["chipRevision"] = ESP.getChipRevision();
-  reply["cores"] = ESP.getChipCores();
-  reply["cpuFreqMHz"] = ESP.getCpuFreqMHz();
-  reply["flashSize"] = ESP.getFlashChipSize();
+  reply["chipModel"] = chip.model;
+  reply["chipRevision"] = chip.revision;
+  reply["cores"] = chip.cores;
+  reply["cpuFreqMHz"] = chip.cpuMHz;
+  reply["flashSize"] = chip.flashSize;
   reply["runningPartition"] = running ? running->label : "";
   reply["otaSlotSize"] = next ? next->size : 0;
-  reply["heapFree"] = ESP.getFreeHeap();
-  reply["heapMin"] = ESP.getMinFreeHeap();
-  reply["psramSize"] = ESP.getPsramSize();
-  reply["rssi"] = WiFi.RSSI();
-  reply["ip"] = WiFi.localIP().toString();
-  reply["mac"] = WiFi.macAddress();
-  reply["uptimeSeconds"] = (uint32_t)(esp_timer_get_time() / 1000000);
+  reply["heapFree"] = freeHeap();
+  reply["heapMin"] = minFreeHeap();
+  reply["psramSize"] = chip.psramSize;
+  reply["rssi"] = wifiRssi();
+  reply["ip"] = ipAddress();
+  reply["mac"] = macAddress();
+  reply["uptimeSeconds"] = uptimeSeconds();
   reply["firmwareVersion"] = st.firmwareVersion;
   reply["clientVersion"] = CLAVDA_LIB_VERSION;
   reply["bundleGeneration"] = st.identity.generation();
   reply["bundleMismatch"] = st.identity.mismatch();
   reply["idfVersion"] = esp_get_idf_version();
+  reply["framework"] = CLAVDA_ARDUINO ? "arduino" : "esp-idf";
   reply["resetReason"] = resetReasonName(esp_reset_reason());
   reply["serialMonitor"] = st.monitor.available();
   reply["dashboard"] = true;
@@ -228,7 +220,7 @@ void fillDeviceInfo(JsonDocument &reply) {
  * refusal is answered with a reason the console can show as-is.
  */
 void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
-  auto reject = [&reply](const String &why) {
+  auto reject = [&reply](const std::string &why) {
     reply["success"] = false;
     reply["state"] = "rejected";
     reply["error"] = why;
@@ -236,8 +228,8 @@ void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
 
   if (st.pull.busy() || st.rebootAt) return reject("An update is already running");
 
-  String plain;
-  String error;
+  std::string plain;
+  std::string error;
   const char *sealed = payload["enc"] | "";
   if (!openJob(st.identity.jobKey().c_str(), sealed, plain, error)) return reject(error);
 
@@ -254,12 +246,12 @@ void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
   const uint32_t size = job["size"] | 0u;
   const uint32_t expires = job["exp"] | 0u;
 
-  if (!st.identity.deviceId().equals(jobDevice)) return reject("This job is for another device");
+  if (st.identity.deviceId() != jobDevice) return reject("This job is for another device");
   if (!isValidId(jobId, 64)) return reject("Malformed job id");
 
   // Plain http is only tolerated against a local, plain-http relay.
-  const String relay = st.bundle->relayUrl;
-  const bool relayIsTls = relay.startsWith("https://") || relay.startsWith("wss://");
+  const std::string relay = st.bundle->relayUrl ? st.bundle->relayUrl : "";
+  const bool relayIsTls = startsWith(relay, "https://") || startsWith(relay, "wss://");
   const bool urlIsTls = !strncmp(url, "https://", 8);
   if (!urlIsTls && (relayIsTls || strncmp(url, "http://", 7))) {
     return reject("The download address must be https");
@@ -267,7 +259,7 @@ void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
   if (!isHex64(sha256)) return reject("The job carries no valid SHA-256");
   if (!validFirmwareVersion(version)) return reject("The job carries no valid version");
   if (strcmp(chip, CLAVDA_CHIP)) {
-    return reject(String("This build is for ") + chip + "; this board is " + CLAVDA_CHIP);
+    return reject(format("This build is for %s; this board is %s", chip, CLAVDA_CHIP));
   }
 
   const time_t now = time(nullptr);
@@ -275,14 +267,14 @@ void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
   if (now > CLOCK_VALID_AFTER && expires && now > (time_t)expires) {
     return reject("This update job has expired; start it again from the console");
   }
-  if (st.identity.lastJobId().equals(jobId)) return reject("This job has already been installed");
-  if (st.firmwareVersion.equals(version)) return reject(String("Already running ") + version);
+  if (st.identity.lastJobId() == jobId) return reject("This job has already been installed");
+  if (st.firmwareVersion == version) return reject(format("Already running %s", version));
 
   const esp_partition_t *slot = esp_ota_get_next_update_partition(nullptr);
   if (!slot) return reject("This partition table has no OTA slot");
   if (size == 0 || size > slot->size) {
-    return reject(String("The image (") + size + " bytes) does not fit the " + slot->size +
-                  "-byte OTA slot");
+    return reject(format("The image (%u bytes) does not fit the %u-byte OTA slot", (unsigned)size,
+                         (unsigned)slot->size));
   }
 
   if (st.onUpdateRequest) {
@@ -308,8 +300,8 @@ void handleOtaUpdate(JsonVariantConst payload, JsonDocument &reply) {
   st.reportedPhase = Pull::IDLE;
   st.lastProgress = 0;
   if (st.onStart) st.onStart();
-  log_i("[ClavdaOTA] Update %s accepted: %s -> %s (%u bytes)", jobId, st.firmwareVersion.c_str(),
-        version, (unsigned)size);
+  CLAVDA_LOGI("Update %s accepted: %s -> %s (%u bytes)", jobId, st.firmwareVersion.c_str(),
+              version, (unsigned)size);
 
   reply["success"] = true;
   reply["state"] = "accepted";
@@ -335,7 +327,7 @@ void onRelayEvent(const char *event, JsonVariantConst data) {
       reply["error"] = "An update is running; reboot after it finishes";
     } else {
       reply["success"] = true;
-      st.rebootAt = millis() + REBOOT_GRACE_MS;
+      st.rebootAt = nowMs() + REBOOT_GRACE_MS;
     }
   } else if (!strcmp(command, "ota_update")) {
     handleOtaUpdate(payload, reply);
@@ -345,7 +337,7 @@ void onRelayEvent(const char *event, JsonVariantConst data) {
     // dash_start / dash_input / dash_stop
   } else if (!strcmp(command, "ota_cancel")) {
     const char *jobId = payload["jobId"] | "";
-    if (st.pull.busy() && st.otaJobId.equals(jobId)) {
+    if (st.pull.busy() && st.otaJobId == jobId) {
       st.pull.abort("Cancelled from the console");
       reply["success"] = true;
     } else {
@@ -354,16 +346,18 @@ void onRelayEvent(const char *event, JsonVariantConst data) {
     }
   } else {
     reply["success"] = false;
-    reply["error"] = String("Unknown command: ") + command + " (not supported on ESP32)";
+    reply["error"] = format("Unknown command: %s (not supported on ESP32)", command);
   }
 
   if (requestId[0]) sendToWeb("response", requestId, reply);
 }
 
 void onRelayOnline() {
+  // A new image on probation (app rollback on) has now proven it can take the next update.
+  confirmRunningImage();
   sendHeartbeat();
   // A console that opened while the link was down learns where the update is.
-  if (st.otaJobId.length()) reportProgress(true);
+  if (!st.otaJobId.empty()) reportProgress(true);
 }
 
 }  // namespace
@@ -372,74 +366,77 @@ bool ClavdaOTAClass::begin(const ClavdaBundle &bundle) {
   if (st.bundle) return st.status != CLAVDA_UNPROVISIONED;
   st.bundle = &bundle;
 
-  st.firmwareVersion = bundle.descriptor ? String(bundle.descriptor->firmware) : String();
+  st.firmwareVersion = bundle.descriptor ? bundle.descriptor->firmware : "";
   if (!validFirmwareVersion(st.firmwareVersion.c_str())) {
-    log_e("[ClavdaOTA] CLAVDA_FIRMWARE_VERSION \"%s\" is not a valid version; the console cannot "
-          "track updates without one",
-          st.firmwareVersion.c_str());
+    CLAVDA_LOGE("CLAVDA_FIRMWARE_VERSION \"%s\" is not a valid version; the console cannot "
+                "track updates without one",
+                st.firmwareVersion.c_str());
   }
 
   if (!st.identity.resolve(bundle)) {
     st.status = CLAVDA_UNPROVISIONED;
-    log_e("[ClavdaOTA] No device identity. Download clavda_device.h from the console and flash "
-          "an image built with it (not a fleet build) once over USB.");
+    CLAVDA_LOGE("No device identity. Download clavda_device.h from the console and flash an "
+                "image built with it (not a fleet build) once over USB.");
     return false;
   }
 
-  String pendingJob;
-  String pendingVersion;
+  std::string pendingJob;
+  std::string pendingVersion;
   if (st.identity.takePendingJob(pendingJob, pendingVersion)) {
-    if (pendingVersion.equals(st.firmwareVersion)) {
-      log_i("[ClavdaOTA] Update %s installed; running %s", pendingJob.c_str(),
-            st.firmwareVersion.c_str());
+    if (pendingVersion == st.firmwareVersion) {
+      CLAVDA_LOGI("Update %s installed; running %s", pendingJob.c_str(),
+                  st.firmwareVersion.c_str());
     } else {
-      log_w("[ClavdaOTA] Update %s expected %s, but %s booted", pendingJob.c_str(),
-            pendingVersion.c_str(), st.firmwareVersion.c_str());
+      CLAVDA_LOGW("Update %s expected %s, but %s booted", pendingJob.c_str(),
+                  pendingVersion.c_str(), st.firmwareVersion.c_str());
     }
   }
-
-  // Needed for job expiry. Left alone if the sketch already runs SNTP.
-  if (!sntpRunning()) configTime(0, 0, "pool.ntp.org", "time.google.com");
 
   st.pull.onProgress([](size_t current, size_t total) {
     if (st.onProgress) st.onProgress(current, total);
   });
 
   // Before the first dial, so the relay's TLS session is allocated in PSRAM too.
-  if (tlsPreferPsram()) log_i("[ClavdaOTA] PSRAM found; TLS buffers will use it");
+  if (tlsPreferPsram()) CLAVDA_LOGI("PSRAM found; TLS buffers will use it");
 
+  st.status = CLAVDA_CONNECTING;
   if (!st.link.begin(bundle.relayUrl ? bundle.relayUrl : "", bundle.caRoots, authJson,
                      onRelayEvent, onRelayOnline)) {
-    st.status = CLAVDA_CONNECTING;
     return false;
   }
 
-  st.status = CLAVDA_CONNECTING;
-  log_i("[ClavdaOTA] Device %s, firmware %s, library " CLAVDA_LIB_VERSION,
-        st.identity.deviceId().c_str(), st.firmwareVersion.c_str());
+  CLAVDA_LOGI("Device %s, firmware %s, library " CLAVDA_LIB_VERSION,
+              st.identity.deviceId().c_str(), st.firmwareVersion.c_str());
   return true;
 }
 
 void ClavdaOTAClass::loop() {
   if (!st.bundle) return;
 
+  // Needed for job expiry; started once the network is up, and left alone if
+  // the application already runs SNTP.
+  if (!st.clockStarted && networkUp()) {
+    startClock();
+    st.clockStarted = true;
+  }
+
   st.link.loop();
   st.pull.loop();
 
-  if (st.otaJobId.length() && !st.rebootAt) {
+  if (!st.otaJobId.empty() && !st.rebootAt) {
     const Pull::Phase phase = st.pull.phase();
     if (phase == Pull::DONE) {
       st.identity.setPendingJob(st.otaJobId, st.pull.job().version);
       reportProgress(true);
       sendResult(true, "");
       if (st.onEnd) st.onEnd(true);
-      log_i("[ClavdaOTA] Update %s written; rebooting into %s", st.otaJobId.c_str(),
-            st.pull.job().version.c_str());
-      st.rebootAt = millis() + REBOOT_GRACE_MS;
+      CLAVDA_LOGI("Update %s written; rebooting into %s", st.otaJobId.c_str(),
+                  st.pull.job().version.c_str());
+      st.rebootAt = nowMs() + REBOOT_GRACE_MS;
     } else if (phase == Pull::FAILED) {
       sendResult(false, st.pull.error());
       if (st.onEnd) st.onEnd(false);
-      st.otaJobId = "";
+      st.otaJobId.clear();
       st.pull.reset();
       sendHeartbeat();
     } else {
@@ -450,16 +447,16 @@ void ClavdaOTAClass::loop() {
   st.monitor.pump(st.link);
   st.dash.pump(st.link);
 
-  const uint32_t interval = st.otaJobId.length() ? HEARTBEAT_UPDATING_MS : HEARTBEAT_MS;
-  if (st.link.online() && millis() - st.lastHeartbeat >= interval) sendHeartbeat();
+  const uint32_t interval = st.otaJobId.empty() ? HEARTBEAT_MS : HEARTBEAT_UPDATING_MS;
+  if (st.link.online() && nowMs() - st.lastHeartbeat >= interval) sendHeartbeat();
 
-  if (st.rebootAt && (int32_t)(millis() - st.rebootAt) >= 0) {
+  if (st.rebootAt && (int32_t)(nowMs() - st.rebootAt) >= 0) {
     st.link.stop();
-    delay(100);
-    ESP.restart();
+    sleepMs(100);
+    esp_restart();
   }
 
-  if (st.otaJobId.length() || st.rebootAt) {
+  if (!st.otaJobId.empty() || st.rebootAt) {
     st.status = CLAVDA_UPDATING;
   } else if (st.link.rejected()) {
     st.status = CLAVDA_REJECTED;

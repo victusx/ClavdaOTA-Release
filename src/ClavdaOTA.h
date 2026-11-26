@@ -4,8 +4,8 @@
  * @author Clavda (support@clavda.com)
  * @brief Over-the-air firmware updates for the ESP32 family, from anywhere,
  *        through the Clavda relay.
- * @version 2.2.0
- * @date 2026-10-13
+ * @version 2.3.0
+ * @date 2026-11-26
  *
  * The one header to include, from either language:
  *

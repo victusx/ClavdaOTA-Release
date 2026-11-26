@@ -21,7 +21,9 @@ ClavdaOTA 2 connects an ESP32 to the Clavda relay, so it can be updated from the
 
 | Platform | Notes |
 | --- | --- |
-| **ESP32** | Including S2, S3, C3 and C6 variants. Built and tested against Arduino-ESP32 3.3. |
+| **ESP32** | Including S2, S3, C3 and C6 variants. The same source builds with the Arduino IDE, PlatformIO and ESP-IDF. |
+
+The library is written against ESP-IDF itself - its TLS transport, OTA, NVS and network APIs - so it needs nothing from the Arduino core. Built with Arduino-ESP32 3.3, it also takes Arduino's `String` and prints to `Serial`; built as an ESP-IDF component, it uses `std::string` and the IDF console. Arduino-ESP32 3.x and ESP-IDF 5.x and 6.x are supported.
 
 ESP8266 and RP2040/RP2350 are not supported by 2.x.
 
@@ -31,7 +33,7 @@ ESP8266 and RP2040/RP2350 are not supported by 2.x.
 
 1. Download the library as a ZIP: **Code → Download ZIP** on [this page](https://github.com/victusx/ClavdaOTA-Release).
 2. `Sketch > Include Library > Add .ZIP Library…` and choose the file.
-3. `Tools > Manage Libraries…` and install the two libraries it depends on: **WebSockets** by Markus Sattler and **ArduinoJson** by Benoit Blanchon. A ZIP install does not fetch them for you.
+3. `Tools > Manage Libraries…` and install the one library it depends on: **ArduinoJson** by Benoit Blanchon. A ZIP install does not fetch it for you.
 
 ### PlatformIO
 
@@ -40,12 +42,38 @@ lib_deps =
   https://github.com/victusx/ClavdaOTA-Release.git
 ```
 
-The WebSockets and ArduinoJson dependencies are pulled in from `library.json`.
+ArduinoJson is pulled in from `library.json`.
+
+### ESP-IDF
+
+Add the library to your project's `main/idf_component.yml` (create the file if the project has none):
+
+```yaml
+dependencies:
+  clavdaota:
+    git: https://github.com/victusx/ClavdaOTA-Release.git
+```
+
+The next `idf.py build` downloads it into `managed_components/`, along with ArduinoJson from the ESP Component Registry. Alternatively, clone the repository into the project's `components/` folder; ArduinoJson still comes from the registry.
+
+Four settings in `sdkconfig.defaults`, which [`examples/idf/CloudDemo`](examples/idf/CloudDemo) has ready to copy:
+
+```ini
+# Two OTA slots: the update goes into the one not running. They need 4 MB of
+# flash, and ESP-IDF assumes 2 MB unless told otherwise.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# The TLS handshake runs in app_main(), whose default 3.5 KB stack is too small
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+```
+
+`partitions.csv` is the example's own: two 1.9 MB app slots on a 4 MB flash, the same layout as the Arduino IDE's Minimal SPIFFS scheme. A board with more flash can make them larger.
 
 ## Quick start
 
 1. In the Clavda console: **Devices → Add Device**, installation platform **ESP32**. It counts toward your device quota like any other device.
-2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE) or in `include/` (PlatformIO).
+2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE), in `include/` (PlatformIO) or in `main/` (ESP-IDF).
 3. Include the library and the file, and call `begin()` and `loop()`:
 
 ```cpp
@@ -65,10 +93,30 @@ void loop() {
 }
 ```
 
-4. Flash it over USB **once**. The device shows as online in the console.
-5. From then on: build a new version, open the device's **Connect** sheet, upload the `.bin` and press **Update now**.
+   Under ESP-IDF, the same goes in `app_main()`, and `clavda_wifi_begin()` brings the network up:
 
-The full sketch is in [`examples/cpp/CloudDemo`](examples/cpp/CloudDemo/CloudDemo.ino), and in C in [`examples/c/CloudDemo`](examples/c/CloudDemo/cloud_demo.c).
+```c
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define CLAVDA_FIRMWARE_VERSION "1.0.0"   // bump for every build you upload
+#include <ClavdaOTA.h>
+#include "clavda_device.h"
+
+void app_main(void) {
+  clavda_wifi_begin("ssid", "password");  // NVS, esp_netif, the event loop and Wi-Fi
+  clavda_begin(&CLAVDA_DEVICE);
+  for (;;) {
+    clavda_loop();
+    vTaskDelay(pdMS_TO_TICKS(10));        // lets the idle task run, for the task watchdog
+  }
+}
+```
+
+4. Flash it over USB **once** (`idf.py flash` under ESP-IDF). The device shows as online in the console.
+5. From then on: build a new version, open the device's **Connect** sheet, upload the `.bin` and press **Update now**. ESP-IDF writes it to `build/<project name>.bin`.
+
+The full sketch is in [`examples/cpp/CloudDemo`](examples/cpp/CloudDemo/CloudDemo.ino), in C in [`examples/c/CloudDemo`](examples/c/CloudDemo/cloud_demo.c), and as an ESP-IDF project in [`examples/idf/CloudDemo`](examples/idf/CloudDemo/main/main.c).
 
 > [!WARNING]
 > `clavda_device.h` contains the device's token and job key. Keep it out of git - the library's `.gitignore` already lists it - and do not share it. Every download is recorded as a device notification in the console.
@@ -79,7 +127,11 @@ The full sketch is in [`examples/cpp/CloudDemo`](examples/cpp/CloudDemo/CloudDem
 
 ### Partition scheme
 
-The update is written to the second OTA slot, so the partition scheme needs two. The Arduino default (1.25 MB per app) is tight: the CloudDemo example alone is 1.1-1.25 MB depending on the chip, so most projects want **Tools → Partition Scheme → Minimal SPIFFS (1.9MB APP with OTA)** or larger.
+The update is written to the second OTA slot, so the partition scheme needs two. The Arduino default (1.25 MB per app) is tight: the CloudDemo example alone is 1.0-1.2 MB depending on the chip, so most projects want **Tools → Partition Scheme → Minimal SPIFFS (1.9MB APP with OTA)** or larger. In PlatformIO, set `board_build.partitions = min_spiffs.csv`. ESP-IDF's default single-app table has no OTA slot at all, so use a custom table like the one in [`examples/idf/CloudDemo`](examples/idf/CloudDemo/partitions.csv).
+
+### Rollback
+
+Under ESP-IDF, turn on `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` in menuconfig and a new image boots as *pending verify*: the library marks it valid once it reaches the relay, and an image that never gets that far is rolled back to the previous one on the next reset. The Arduino core marks each new image valid itself as it boots, unless the sketch defines `bool verifyRollbackLater() { return true; }`.
 
 ## Serial Monitor
 
@@ -108,8 +160,10 @@ void loop() {
 - Each monitor gets its own key from the console, so the relay carries the output without being able to read it. Up to 3 monitors can watch one device at once.
 - Typing into the device needs permission to edit devices; everyone who can see the device can watch.
 - `ClavdaSerial` is safe to print to from any task. Output printed while the device is offline is sent when it reconnects, as far as the buffer reaches; the console marks anything it missed.
+- `ClavdaSerial.captureLogs(true)` (`clavda_serial_capture_logs(true)` in C) sends ESP-IDF's log output there as well - `ESP_LOGx` from your code, the library's own messages and the system's - while it still reaches USB as before.
+- Under ESP-IDF, `ClavdaSerial.begin()` mirrors to the IDF console (stdout) instead of `Serial`: `begin(true, 8192)`, or `begin(false)` to keep the output in the buffer only. `onMessage()` handlers take a `std::string` instead of a `String`.
 
-Coming from **WebSerial**: `begin()` takes an optional mirror instead of a web server, and `print`, `printf`, `onMessage()` work as before. There is no web page on the device and no port to open. The full sketch is in [`examples/cpp/SerialMonitor`](examples/cpp/SerialMonitor/SerialMonitor.ino), and in C in [`examples/c/SerialMonitor`](examples/c/SerialMonitor/serial_monitor.c).
+Coming from **WebSerial**: `begin()` takes an optional mirror instead of a web server, and `print`, `printf`, `onMessage()` work as before. There is no web page on the device and no port to open. The full sketch is in [`examples/cpp/SerialMonitor`](examples/cpp/SerialMonitor/SerialMonitor.ino), in C in [`examples/c/SerialMonitor`](examples/c/SerialMonitor/serial_monitor.c), and as an ESP-IDF project in [`examples/idf/SerialMonitor`](examples/idf/SerialMonitor/main/main.c).
 
 ## Dashboard
 
@@ -139,7 +193,7 @@ void loop() {
 - Each open dashboard gets its own key, like a Serial Monitor, and the device only takes control input from people with permission to edit devices. Up to 3 dashboards can be open on one device.
 - Values are sent at most every 100 ms per dashboard, and only what changed. A widget costs about 70 bytes; line charts share a ring of the last 64 points (`CLAVDA_DASH_POINTS`), allocated on the first `add()`. Use widgets from `setup()` and `loop()`, not from other tasks.
 
-The full sketch is in [`examples/cpp/Dashboard`](examples/cpp/Dashboard/Dashboard.ino), and in C in [`examples/c/Dashboard`](examples/c/Dashboard/dashboard.c).
+The full sketch is in [`examples/cpp/Dashboard`](examples/cpp/Dashboard/Dashboard.ino), in C in [`examples/c/Dashboard`](examples/c/Dashboard/dashboard.c), and as an ESP-IDF project in [`examples/idf/Dashboard`](examples/idf/Dashboard/main/main.c).
 
 ## From C
 
@@ -173,11 +227,11 @@ void app_loop(void) {
 }
 ```
 
-- The C API is a thin layer over the C++ implementation, so both behave the same and the library itself still compiles as C++. The Arduino IDE, PlatformIO, and ESP-IDF with the Arduino component all do that on their own; only your code needs to be C.
-- Start Wi-Fi with `clavda_wifi_begin()`: the library follows the connection through the Arduino Wi-Fi driver, which `esp_wifi_*` calls of your own would bypass.
+- The C API is a thin layer over the C++ implementation, so both behave the same and the library itself still compiles as C++. The Arduino IDE, PlatformIO and ESP-IDF all do that on their own; only your code needs to be C.
+- Start Wi-Fi with `clavda_wifi_begin()`. On the Arduino core it calls `WiFi.begin()`; under ESP-IDF it sets up NVS, `esp_netif`, the default event loop and the Wi-Fi driver, and reconnects whenever the network drops. A project that brings up its own network (Ethernet, or Wi-Fi set up its own way) skips it: the library only waits for the default network interface to have an address.
 - A widget's ID is not copied - pass a string literal. Every function that takes a widget or an input accepts `NULL` and does nothing, so a widget that failed to allocate cannot crash the sketch.
-- Print with `clavda_serial_printf()` and friends: `clavda_serial_begin(115200, 0)` starts Serial itself, which C code cannot, and everything printed goes to USB and to the console's Serial Monitor.
-- In the Arduino IDE, `setup()` and `loop()` are called as C++, so a sketch in C keeps a short `.ino` that calls into the `.c` file. Every example comes in both languages: [`examples/c/`](examples/c) next to [`examples/cpp/`](examples/cpp).
+- Print with `clavda_serial_printf()` and friends: `clavda_serial_begin(115200, 0)` starts Serial itself on the Arduino core, which C code cannot, and everything printed goes to USB and to the console's Serial Monitor. Under ESP-IDF it prints to the IDF console, at the rate set in menuconfig.
+- In the Arduino IDE, `setup()` and `loop()` are called as C++, so a sketch in C keeps a short `.ino` that calls into the `.c` file. Every example comes in both languages: [`examples/c/`](examples/c) next to [`examples/cpp/`](examples/cpp). Under ESP-IDF there is no `.ino`: `app_main()` in `main/main.c` calls the library directly, as in the three projects in [`examples/idf/`](examples/idf).
 
 | C++ | C |
 | --- | --- |
@@ -185,7 +239,8 @@ void app_loop(void) {
 | `ClavdaOTA.status()` / `deviceId()` / `firmwareVersion()` / `bundleMismatch()` | `clavda_status()` / `clavda_device_id()` / `clavda_firmware_version()` / `clavda_bundle_mismatch()` |
 | `ClavdaOTA.onUpdateRequest()` / `onStart()` / `onProgress()` / `onEnd()` | `clavda_on_update_request()` / `_start()` / `_progress()` / `_end()`, each `(callback, user)` |
 | `WiFi.begin(ssid, password)` | `clavda_wifi_begin(ssid, password)`, `clavda_wifi_connected()` |
-| `Serial.begin(115200)`, `ClavdaSerial.begin(&Serial, size)` | `clavda_serial_begin(115200, size)` - starts Serial and mirrors to it; `0` baud for no mirror, `0` size for the default |
+| `Serial.begin(115200)`, `ClavdaSerial.begin(&Serial, size)` | `clavda_serial_begin(115200, size)` - starts Serial and mirrors to it (the IDF console under ESP-IDF); `0` baud for no mirror, `0` size for the default |
+| `ClavdaSerial.captureLogs(true)` | `clavda_serial_capture_logs(true)` |
 | `ClavdaSerial.print()` / `println()` / `printf()` / `write()` | `clavda_serial_print()` / `_println()` / `_printf()` / `_write()` |
 | `ClavdaSerial.onMessage(cb)` / `monitors()` | `clavda_serial_on_message(cb, user)` - the line arrives NUL-terminated / `clavda_serial_monitors()` |
 | `ClavdaWidget w("id")` | `clavda_widget_t *w = clavda_widget_create("id")`, `clavda_widget_free(w)` |
@@ -200,8 +255,8 @@ On a connected ESP32, nearly all the RAM that goes when ClavdaOTA starts is the 
 
 | What | RAM |
 | --- | --- |
-| The TLS connection to the relay | Roughly 35-40 KB of heap while connected. Arduino-ESP32 3.x builds mbedTLS with a fixed 16 KB receive buffer and a 16 KB send buffer per connection. |
-| ClavdaOTA itself | About 5.5 KB of static RAM and in-RAM code on an ESP32-S3 (with its WebSockets and JSON dependencies) and 1-2 KB of heap. |
+| The TLS connection to the relay | Roughly 35-40 KB of heap while connected. Arduino-ESP32 3.x builds mbedTLS with a fixed 16 KB receive buffer and a 16 KB send buffer per connection; ESP-IDF's default configuration has a 4 KB send buffer, which saves about 12 KB. |
+| ClavdaOTA itself | About 5.5 KB of static RAM and in-RAM code on an ESP32-S3 (with its JSON dependency) and 1-2 KB of heap. |
 | `ClavdaSerial`, if you start it | The buffer you give `begin()` - 2 KB by default - plus about 1.5 KB only while a monitor is open. |
 | An update in progress | A second TLS connection, to the firmware download, until the image is written. This is what the console's "lowest" free heap reflects. |
 
@@ -211,7 +266,7 @@ Compared with a sketch that never uses Wi-Fi, such as Blink, part of the differe
 
 ### Boards with PSRAM
 
-If the board has PSRAM (the R in module names like N8R2 or N16R8), turn it on: **Tools → PSRAM** in the Arduino IDE, OPI PSRAM for R8 modules and QSPI PSRAM for R2. With PSRAM on:
+If the board has PSRAM (the R in module names like N8R2 or N16R8), turn it on: **Tools → PSRAM** in the Arduino IDE, OPI PSRAM for R8 modules and QSPI PSRAM for R2; `CONFIG_SPIRAM` in ESP-IDF's menuconfig. With PSRAM on:
 
 - the core puts Wi-Fi and lwIP buffers there;
 - `ClavdaOTA.begin()` points mbedTLS at it, so the relay connection and an update's download connection stop using internal RAM. This applies to every TLS connection in the sketch;
@@ -234,7 +289,7 @@ custom_sdkconfig =
   CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 ```
 
-The first build with `custom_sdkconfig` recompiles the Arduino core libraries, which takes several minutes. The setting applies to every TLS connection in the sketch.
+The first build with `custom_sdkconfig` recompiles the Arduino core libraries, which takes several minutes. The setting applies to every TLS connection in the sketch. Under ESP-IDF, a 4 KB send buffer is already the default (**menuconfig → Component config → mbedTLS**).
 
 ## Per-device and fleet images
 
@@ -249,7 +304,12 @@ Everything in `clavda_device.h` apart from the relay address and certificate roo
 build_flags = -D CLAVDA_FLEET_BUILD
 ```
 
-To give a board a different identity, erase its flash (*Tools → Erase All Flash Before Sketch Upload*, or `pio run -t erase`) and flash an image built with the new device's file.
+```cmake
+# ESP-IDF: main/CMakeLists.txt, after idf_component_register()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE CLAVDA_FLEET_BUILD)
+```
+
+To give a board a different identity, erase its flash (*Tools → Erase All Flash Before Sketch Upload*, `pio run -t erase` or `idf.py erase-flash`) and flash an image built with the new device's file.
 
 ## How an update works
 
@@ -272,16 +332,17 @@ The job travels encrypted with the device's own key, so the relay never sees the
 | `onStart(cb)` / `onProgress(cb)` / `onEnd(cb)` | Update lifecycle callbacks. |
 | `status()` | `CLAVDA_UNPROVISIONED`, `CLAVDA_CONNECTING`, `CLAVDA_ONLINE`, `CLAVDA_UPDATING` or `CLAVDA_REJECTED`. |
 | `deviceId()` / `firmwareVersion()` / `bundleMismatch()` | What the board is running as. |
-| `ClavdaSerial.begin(mirror, bufferSize)` | Start the Serial Monitor buffer (2 KB by default). `mirror`, e.g. `&Serial`, also gets everything printed. |
+| `ClavdaSerial.begin(mirror, bufferSize)` | Start the Serial Monitor buffer (2 KB by default). `mirror`, e.g. `&Serial`, also gets everything printed; under ESP-IDF it is `true` (the default) to print to the IDF console too. |
+| `ClavdaSerial.captureLogs(on)` | Also send ESP-IDF's log output (`ESP_LOGx`) to the Serial Monitor. |
 | `ClavdaSerial.print()` / `println()` / `printf()` / `write()` | A `Print`, like `Serial`. |
-| `ClavdaSerial.onMessage(cb)` | `void cb(const String &msg)` or `void cb(uint8_t *data, size_t len)` - a line typed in the console. |
+| `ClavdaSerial.onMessage(cb)` | `void cb(const String &msg)` (`const std::string &` under ESP-IDF) or `void cb(uint8_t *data, size_t len)` - a line typed in the console. |
 | `ClavdaSerial.monitors()` | How many Serial Monitors are open on this device. |
 | `ClavdaWidget w("id")` | A dashboard widget, named by its ID in the console. Declare it at global scope. |
 | `w.set(value)` / `w.set(text, level)` | Its value: a number, `bool` or text; a status card's message and `CLAVDA_INFO` / `_SUCCESS` / `_WARNING` / `_DANGER`. |
 | `w.add(value)` / `w.setSeries(labels, values, n)` | A line-chart point; a bar chart's bars. |
 | `w.onChange(cb)` | `void cb(const ClavdaInput &in)` - a toggle, slider, button or text input was used. `in.asBool()`, `asInt()`, `asFloat()`, `asText()`. |
 
-Diagnostics go through the ESP32 log: set **Tools → Core Debug Level → Info** to see them.
+Diagnostics go through the ESP32 log: set **Tools → Core Debug Level → Info** to see them in the Arduino IDE. Under ESP-IDF they log with the `ClavdaOTA` tag at the level set in menuconfig, Info by default; `esp_log_level_set("ClavdaOTA", ESP_LOG_WARN)` quiets them.
 
 ## Library layout
 
@@ -294,6 +355,8 @@ Diagnostics go through the ESP32 log: set **Tools → Core Debug Level → Info*
 | `src/c/` | The C API, on top of `src/cpp/`. |
 | `examples/cpp/` | `CloudDemo`, `SerialMonitor` and `Dashboard`, in C++. |
 | `examples/c/` | The same three in C: a short `.ino` that calls into the sketch's `.c` file. |
+| `examples/idf/` | The same three as ESP-IDF projects, in C, each with its partition table and `sdkconfig.defaults`. |
+| `CMakeLists.txt`, `idf_component.yml` | What makes the repository an ESP-IDF component. `library.properties` and `library.json` do the same for the Arduino IDE and PlatformIO. |
 | `test/` | On-device tests of both APIs; see [`test/README.md`](test/README.md). Kept out of `src/`, which is compiled into every sketch. |
 
 ## Contributing

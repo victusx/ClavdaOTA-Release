@@ -1,7 +1,8 @@
 #ifndef ClavdaMonitor_h
 #define ClavdaMonitor_h
 
-#include <Arduino.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <ArduinoJson.h>
 #include "ClavdaIdentity.h"
 

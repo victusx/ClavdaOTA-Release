@@ -1,7 +1,8 @@
 #include "ClavdaSession.h"
 
-#include <ArduinoJson.h>
+#include <string.h>
 #include <time.h>
+#include <ArduinoJson.h>
 
 #include "ClavdaCrypto.h"
 
@@ -11,22 +12,22 @@ namespace clavda {
 static const time_t CLOCK_VALID_AFTER = 1700000000;
 
 bool openSession(const char *kind, const char *what, const char *sessionId, const char *enc,
-                 Identity &identity, SessionGrant &grant, const char *&code, String &why) {
+                 Identity &identity, SessionGrant &grant, const char *&code, std::string &why) {
   code = "invalid";
   if (!isValidId(sessionId, 64)) {
     why = "Malformed session id";
     return false;
   }
 
-  String plain;
-  String error;
+  std::string plain;
+  std::string error;
   if (!openJob(identity.jobKey().c_str(), enc, plain, error)) {
-    why = String("The ") + what + " did not verify on this device";
+    why = std::string("The ") + what + " did not verify on this device";
     return false;
   }
   JsonDocument sealed;
   if (deserializeJson(sealed, plain)) {
-    why = String("Malformed ") + what;
+    why = std::string("Malformed ") + what;
     return false;
   }
 
@@ -34,11 +35,11 @@ bool openSession(const char *kind, const char *what, const char *sessionId, cons
   const char *sealedId = sealed["sessionId"] | "";
   const char *sealedDevice = sealed["deviceId"] | "";
   if ((sealed["v"] | 0) != 1 || strcmp(sealedKind, kind)) {
-    why = String("This ") + what + " needs a newer ClavdaOTA library";
+    why = std::string("This ") + what + " needs a newer ClavdaOTA library";
     return false;
   }
-  if (strcmp(sealedId, sessionId) || !identity.deviceId().equals(sealedDevice)) {
-    why = String("This ") + what + " is for another device";
+  if (strcmp(sealedId, sessionId) || identity.deviceId() != sealedDevice) {
+    why = std::string("This ") + what + " is for another device";
     return false;
   }
 
@@ -46,7 +47,7 @@ bool openSession(const char *kind, const char *what, const char *sessionId, cons
   const uint32_t expires = sealed["exp"] | 0u;
   if (now > CLOCK_VALID_AFTER && expires && now > (time_t)expires) {
     code = "expired";
-    why = String("This ") + what + " has expired";
+    why = std::string("This ") + what + " has expired";
     return false;
   }
 
@@ -54,7 +55,7 @@ bool openSession(const char *kind, const char *what, const char *sessionId, cons
   size_t keyLen = 0;
   if (!base64Decode(sealed["key"] | "", key, sizeof(key), keyLen) || keyLen != 32) {
     memset(key, 0, sizeof(key));
-    why = String("The ") + what + " carries no valid key";
+    why = std::string("The ") + what + " carries no valid key";
     return false;
   }
   memcpy(grant.key, key, sizeof(grant.key));

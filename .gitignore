@@ -43,3 +43,8 @@ node_modules
 clavda_device.h
 # arduino-cli exports build output next to a sketch
 **/build/
+# ESP-IDF build output and generated files
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock

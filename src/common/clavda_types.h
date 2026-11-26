@@ -15,7 +15,25 @@
   #error "ClavdaOTA 2.x runs on the ESP32 family only (ESP32, S2, S3, C3, C6)."
 #endif
 
-#define CLAVDA_LIB_VERSION "2.2.0"
+/**
+ * 1 when built on the Arduino core (the Arduino IDE, or PlatformIO with
+ * framework = arduino), 0 under plain ESP-IDF. The library itself is written
+ * against ESP-IDF either way; this only adds the Arduino conveniences to the
+ * C++ API - String overloads, and ClavdaSerial as an Arduino Print. The
+ * ESP-IDF component sets it to 0 for everything that uses it.
+ */
+#ifndef CLAVDA_ARDUINO
+  #if defined(ARDUINO) && defined(__has_include)
+    #if __has_include(<Print.h>)
+      #define CLAVDA_ARDUINO 1
+    #endif
+  #endif
+#endif
+#ifndef CLAVDA_ARDUINO
+  #define CLAVDA_ARDUINO 0
+#endif
+
+#define CLAVDA_LIB_VERSION "2.3.0"
 
 /** The chip family as the IDF names it: "esp32", "esp32s3", "esp32c3", ... */
 #define CLAVDA_CHIP CONFIG_IDF_TARGET

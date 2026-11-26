@@ -1,7 +1,8 @@
 #ifndef ClavdaSession_h
 #define ClavdaSession_h
 
-#include <Arduino.h>
+#include <stdint.h>
+#include <string>
 #include "ClavdaIdentity.h"
 
 namespace clavda {
@@ -22,7 +23,7 @@ struct SessionGrant {
  * as `what` ("monitor session", "dashboard session").
  */
 bool openSession(const char *kind, const char *what, const char *sessionId, const char *enc,
-                 Identity &identity, SessionGrant &grant, const char *&code, String &why);
+                 Identity &identity, SessionGrant &grant, const char *&code, std::string &why);
 
 }  // namespace clavda
 

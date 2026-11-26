@@ -4,14 +4,17 @@
  * @author Clavda (support@clavda.com)
  * @brief Over-the-air firmware updates for the ESP32 family, from anywhere,
  *        through the Clavda relay.
- * @version 2.2.0
- * @date 2026-10-13
+ * @version 2.3.0
+ * @date 2026-11-26
+ *
+ * The same code builds in the Arduino IDE, in PlatformIO and in an ESP-IDF
+ * project: the library is written against ESP-IDF, which the Arduino core is
+ * built on, and needs no Arduino header of its own.
  */
 
 #ifndef ClavdaOTA_h
 #define ClavdaOTA_h
 
-#include <Arduino.h>
 #include <functional>
 #include "../common/clavda_types.h"
 #include "ClavdaSerial.h"

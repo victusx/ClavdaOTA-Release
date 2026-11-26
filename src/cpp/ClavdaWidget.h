@@ -1,9 +1,14 @@
 #ifndef ClavdaWidget_h
 #define ClavdaWidget_h
 
-#include <Arduino.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <functional>
+#include <string>
 #include "../common/clavda_types.h"
+#if CLAVDA_ARDUINO
+  #include <WString.h>
+#endif
 
 /** Longest text a widget holds; longer text is cut. Keeps every frame small. */
 #ifndef CLAVDA_WIDGET_MAX_TEXT
@@ -89,10 +94,14 @@ class ClavdaWidget {
     void set(bool value);
     /** Text, and status cards. */
     void set(const char *text) { setText(text, CLAVDA_NEUTRAL); }
-    void set(const String &text) { setText(text.c_str(), CLAVDA_NEUTRAL); }
+    void set(const std::string &text) { setText(text.c_str(), CLAVDA_NEUTRAL); }
     /** A status card's message and colour. */
     void set(const char *text, ClavdaLevel level) { setText(text, level); }
+    void set(const std::string &text, ClavdaLevel level) { setText(text.c_str(), level); }
+#if CLAVDA_ARDUINO
+    void set(const String &text) { setText(text.c_str(), CLAVDA_NEUTRAL); }
     void set(const String &text, ClavdaLevel level) { setText(text.c_str(), level); }
+#endif
 
     /** One point on a line chart. The console times it, so the board needs no clock. */
     void add(float value);
@@ -123,7 +132,7 @@ class ClavdaWidget {
     struct Point {
       ClavdaWidget *widget;
       float value;
-      uint32_t at;  // millis()
+      uint32_t at;  // milliseconds since boot
     };
 
     void setNumber(double value, bool isFloat);
@@ -137,7 +146,7 @@ class ClavdaWidget {
     bool _bool = false;
     ClavdaLevel _level = CLAVDA_NEUTRAL;
     double _number = 0;
-    String _text;
+    std::string _text;
     const char *const *_labels = nullptr;
     const float *_values = nullptr;
     size_t _count = 0;
