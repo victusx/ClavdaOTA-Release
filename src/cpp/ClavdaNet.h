@@ -1,6 +1,8 @@
 #ifndef ClavdaNet_h
 #define ClavdaNet_h
 
+#include "ClavdaMbedtlsConfig.h"  // first: esp_transport leads to mbedTLS
+
 #include <stddef.h>
 #include <stdint.h>
 #include <functional>
@@ -115,6 +117,8 @@ class WebSocket {
     Connection _conn;
     /** Bytes read and not yet parsed. */
     std::string _rx;
+    /** _rx holds bytes that came with the upgrade response, not parsed yet. */
+    bool _unparsed = false;
     /** A message that came in fragments, so far. */
     std::string _message;
     uint8_t _messageOpcode = 0;

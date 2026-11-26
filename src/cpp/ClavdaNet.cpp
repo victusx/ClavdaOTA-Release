@@ -264,6 +264,9 @@ bool WebSocket::connect(const Url &url, const char *caRoots, int timeoutMs, std:
     _conn.close();
     return false;
   }
+  // The server's first frame - Engine.IO's OPEN - can come in the same read
+  // as the response head. readHead() leaves it in _rx, and poll() sees to it.
+  _unparsed = !_rx.empty();
   _lastRx = nowMs();
   return true;
 }
@@ -278,6 +281,7 @@ void WebSocket::close() {
   }
   _conn.close();
   _rx.clear();
+  _unparsed = false;
   _message.clear();
   _failed = false;
 }
@@ -288,6 +292,14 @@ uint32_t WebSocket::idleMs() const {
 
 bool WebSocket::poll(const TextHandler &onText) {
   if (!connected()) return false;
+  // Frames that arrived with the upgrade response. The loop below only parses
+  // after a read brings something new, and the server sends nothing more
+  // until it is answered: left there, they would wait for the WebSocket ping
+  // that an idle connection draws after 15 s.
+  if (_unparsed) {
+    _unparsed = false;
+    if (!parse(onText)) return false;
+  }
   // A few reads at most, so one busy connection cannot hold loop() for long.
   for (int i = 0; i < 4; i++) {
     const size_t had = _rx.size();

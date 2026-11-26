@@ -60,11 +60,10 @@ bool Link::begin(const std::string &relayUrl, const char *caRoots,
 
 void Link::loop() {
   if (!_started || _stopped) return;
-  const uint32_t now = nowMs();
 
   if (!_ws.connected()) {
     // Without a network every dial is a DNS failure; wait for the application to bring it up.
-    if (!networkUp() || now - _redialScheduledAt < _redialDelay) return;
+    if (!networkUp() || nowMs() - _redialScheduledAt < _redialDelay) return;
     dial();
     return;
   }
@@ -76,6 +75,12 @@ void Link::loop() {
     return;
   }
 
+  // Read the clock only now: what poll() handled stamped _lastServerPing and
+  // _onlineSince as it went. A time taken before it is older than those
+  // stamps, and the unsigned difference would wrap round to about 49 days -
+  // dropping the link straight after the relay's OPEN or a ping whenever
+  // decrypting and handling it took a millisecond or more.
+  const uint32_t now = nowMs();
   const uint32_t idle = _ws.idleMs();
   if (idle > WS_DEAD_MS) {
     CLAVDA_LOGW("No reply from the relay; reconnecting");

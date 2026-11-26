@@ -42,7 +42,22 @@ lib_deps =
   https://github.com/victusx/ClavdaOTA-Release.git
 ```
 
-ArduinoJson is pulled in from `library.json`.
+ArduinoJson is pulled in from `library.json`. The library builds with `framework = arduino` and with `framework = espidf`.
+
+With `framework = espidf` there is no Arduino core, and ESP-IDF's defaults leave no room for updates. The project needs the same `partitions.csv` and `sdkconfig.defaults` as an [ESP-IDF](#esp-idf) project, next to `platformio.ini`, and two more lines in it:
+
+```ini
+[env:esp32s3]
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/53.03.11/platform-espressif32.zip
+board = esp32-s3-devkitc-1
+framework = espidf
+board_build.partitions = partitions.csv
+board_upload.flash_size = 4MB   ; the same as CONFIG_ESPTOOLPY_FLASHSIZE_4MB
+lib_deps =
+  https://github.com/victusx/ClavdaOTA-Release.git
+```
+
+PlatformIO reads `sdkconfig.defaults` only while the project has no `sdkconfig.<env>` yet; delete that file after changing it. The code goes in `src/main.c`, or `src/main.cpp` for C++. Tested with pioarduino 53.03.11, which ships ESP-IDF 5.3.
 
 ### ESP-IDF
 
@@ -73,7 +88,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 ## Quick start
 
 1. In the Clavda console: **Devices → Add Device**, installation platform **ESP32**. It counts toward your device quota like any other device.
-2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE), in `include/` (PlatformIO) or in `main/` (ESP-IDF).
+2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE), in `src/` or `include/` (PlatformIO) or in `main/` (ESP-IDF).
 3. Include the library and the file, and call `begin()` and `loop()`:
 
 ```cpp
@@ -114,7 +129,7 @@ void app_main(void) {
 ```
 
 4. Flash it over USB **once** (`idf.py flash` under ESP-IDF). The device shows as online in the console.
-5. From then on: build a new version, open the device's **Connect** sheet, upload the `.bin` and press **Update now**. ESP-IDF writes it to `build/<project name>.bin`.
+5. From then on: build a new version, open the device's **Connect** sheet, upload the `.bin` and press **Update now**. ESP-IDF writes it to `build/<project name>.bin`, PlatformIO to `.pio/build/<env>/firmware.bin`.
 
 The full sketch is in [`examples/cpp/CloudDemo`](examples/cpp/CloudDemo/CloudDemo.ino), in C in [`examples/c/CloudDemo`](examples/c/CloudDemo/cloud_demo.c), and as an ESP-IDF project in [`examples/idf/CloudDemo`](examples/idf/CloudDemo/main/main.c).
 

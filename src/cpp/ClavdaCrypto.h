@@ -1,6 +1,8 @@
 #ifndef ClavdaCrypto_h
 #define ClavdaCrypto_h
 
+#include "ClavdaMbedtlsConfig.h"  // first: before any mbedTLS header
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
