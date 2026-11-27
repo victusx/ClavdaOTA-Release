@@ -37,12 +37,12 @@ ESP8266 and RP2040/RP2350 are not supported by 2.x.
 
 ### PlatformIO
 
+The library builds with `framework = arduino` and with `framework = espidf`. With `framework = arduino`, add it to `platformio.ini`; ArduinoJson is pulled in from `library.json`:
+
 ```ini
 lib_deps =
   https://github.com/victusx/ClavdaOTA-Release.git
 ```
-
-ArduinoJson is pulled in from `library.json`. The library builds with `framework = arduino` and with `framework = espidf`.
 
 With `framework = espidf` there is no Arduino core, and ESP-IDF's defaults leave no room for updates. The project needs the same `partitions.csv` and `sdkconfig.defaults` as an [ESP-IDF](#esp-idf) project, next to `platformio.ini`, and two more lines in it:
 
@@ -53,11 +53,34 @@ board = esp32-s3-devkitc-1
 framework = espidf
 board_build.partitions = partitions.csv
 board_upload.flash_size = 4MB   ; the same as CONFIG_ESPTOOLPY_FLASHSIZE_4MB
-lib_deps =
-  https://github.com/victusx/ClavdaOTA-Release.git
 ```
 
-PlatformIO reads `sdkconfig.defaults` only while the project has no `sdkconfig.<env>` yet; delete that file after changing it. The code goes in `src/main.c`, or `src/main.cpp` for C++. Tested with pioarduino 53.03.11, which ships ESP-IDF 5.3.
+There is no `lib_deps` here: the library comes in as an ESP-IDF component, so PlatformIO and ESP-IDF's own tools (the ESP-IDF extension for VS Code, `idf.py`) build the project alike. With `lib_deps` as well, PlatformIO compiles a second copy of the library. Three files:
+
+```yaml
+# src/idf_component.yml: the component manager downloads ClavdaOTA and ArduinoJson
+dependencies:
+  clavdaota:
+    git: https://github.com/victusx/ClavdaOTA-Release.git
+```
+
+```cmake
+# src/CMakeLists.txt: the file PlatformIO generated, with REQUIRES added
+FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
+
+idf_component_register(SRCS ${app_sources} REQUIRES clavdaota)
+```
+
+```cmake
+# CMakeLists.txt, next to platformio.ini. ESP-IDF's own tools look for
+# app_main() in main/; the second line points them at src/.
+cmake_minimum_required(VERSION 3.16.0)
+list(APPEND EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/src")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(my_project)
+```
+
+With a `REQUIRES` list, ESP-IDF's tools let the code in `src/` use only the components on it: add any driver it includes, such as `esp_driver_ledc` for `driver/ledc.h`. PlatformIO reads `sdkconfig.defaults` only while the project has no `sdkconfig.<env>` yet, and ESP-IDF's tools only while it has no `sdkconfig`; delete that file after changing it. The code goes in `src/main.c`, or `src/main.cpp` for C++. Tested with pioarduino 53.03.11, which ships ESP-IDF 5.3, and with `idf.py` from ESP-IDF 6.1.
 
 ### ESP-IDF
 
@@ -88,7 +111,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 ## Quick start
 
 1. In the Clavda console: **Devices → Add Device**, installation platform **ESP32**. It counts toward your device quota like any other device.
-2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE), in `src/` or `include/` (PlatformIO) or in `main/` (ESP-IDF).
+2. **Manage → Get Device File → Download clavda_device.h**, and put it next to your sketch (Arduino IDE), in `src/` (PlatformIO; `include/` also works with `framework = arduino`) or in `main/` (ESP-IDF).
 3. Include the library and the file, and call `begin()` and `loop()`:
 
 ```cpp
